@@ -16,21 +16,21 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-# Monitored applications array (ensure service names match systemctl service names)
-monitored_apps = [
-    "clamav-daemon",
-    "spamd",
-    "dovecot",
-    "opendmarc",
-    "kiwiirc",
-    "amavis",
-    "postfix",
-    "webmin",
-    "monitorix",
-    "php8.2-fpm",
-    "php8.3-fpm",
-    "mariadb"
-]
+# Monitored applications mapping: process names to service names
+monitored_apps = {
+    "clamd": "clamav-daemon",
+    "spamd": "spamd",
+    "dovecot": "dovecot",
+    "opendmarc": "opendmarc",
+    "kiwiirc": "kiwiirc",
+    "amavis": "amavis",
+    "postfix": "postfix",
+    "webmin": "webmin",
+    "monitorix": "monitorix",
+    "php-fpm8.2": "php8.2-fpm",
+    "php-fpm8.3": "php8.3-fpm",
+    "mariadbd": "mariadb"
+}
 
 # Swap thresholds
 SWAP_HIGH_THRESHOLD = 75  # Threshold to start taking action
@@ -66,24 +66,24 @@ def get_memory_and_swap_usage():
     return mem.percent, swap.percent
 
 # Restart app
-def restart_app(app_name, log_lines):
+def restart_app(service_name, log_lines):
     try:
-        log_action(f"Restarting service {app_name}", log_lines)
+        log_action(f"Restarting service {service_name}", log_lines)
         result = subprocess.run(
-            ['systemctl', 'restart', app_name],
+            ['systemctl', 'restart', service_name],
             check=True,
             timeout=60,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True
         )
-        log_action(f"Service {app_name} restarted successfully.", log_lines)
+        log_action(f"Service {service_name} restarted successfully.", log_lines)
     except subprocess.TimeoutExpired:
-        log_action(f"Restarting {app_name} timed out.", log_lines)
+        log_action(f"Restarting {service_name} timed out.", log_lines)
     except subprocess.CalledProcessError as e:
-        log_action(f"Failed to restart {app_name}: {e.stderr.strip()}", log_lines)
+        log_action(f"Failed to restart {service_name}: {e.stderr.strip()}", log_lines)
     except Exception as e:
-        log_action(f"Unexpected error restarting {app_name}: {e}", log_lines)
+        log_action(f"Unexpected error restarting {service_name}: {e}", log_lines)
 
 # Drop caches
 def drop_caches(log_lines):
@@ -131,8 +131,8 @@ def monitor_swap_usage(log_lines, bottom_win):
         if swap_percent >= SWAP_LOW_THRESHOLD:
             log_action(f"Swap usage still too high at {swap_percent}%, restarting services.", log_lines)
             apps_restarted = 0
-            for app_name in monitored_apps:
-                restart_app(app_name, log_lines)
+            for proc_name, service_name in monitored_apps.items():
+                restart_app(service_name, log_lines)
                 apps_restarted += 1
                 time.sleep(2)
                 swap_percent = psutil.swap_memory().percent
@@ -166,7 +166,7 @@ def setup_ui(stdscr):
     top_left_w = width // 2
     top_right_w = width - top_left_w
 
-    # Create windows starting from line 1 to avoid overlapping the title
+    # Create windows starting from line 2 to avoid overlapping the title
     top_left_win = curses.newwin(top_left_h, top_left_w, 2, 0)
     top_right_win = curses.newwin(top_right_h, top_right_w, 2, top_left_w)
     bottom_win = curses.newwin(bottom_h, width, top_left_h + 2, 0)
@@ -211,17 +211,18 @@ def update_ui(top_left_win, top_right_win):
     for idx in range(3):
         # Overwrite previous data with spaces
         top_right_win.addstr(2 + idx, 2, " " * (top_right_win.getmaxyx()[1] - 4))
-    for idx, app in enumerate(top_apps):
-        app_name = app.info['name']
-        mem_percent = app.info['memory_percent']
+    for idx, proc in enumerate(top_apps):
+        app_name = proc.info['name']
+        mem_percent = proc.info['memory_percent']
         top_right_win.addstr(2 + idx, 2, f"{app_name}: {mem_percent:.2f}%")
     top_right_win.refresh()
 
 # Get top memory apps (all monitored apps)
 def get_top_memory_apps():
     processes = []
+    monitored_process_names = list(monitored_apps.keys())
     for proc in psutil.process_iter(['pid', 'name', 'memory_percent']):
-        if proc.info['name'] in monitored_apps:
+        if proc.info['name'] in monitored_process_names:
             processes.append(proc)
     processes.sort(key=lambda p: p.info['memory_percent'], reverse=True)
     return processes
