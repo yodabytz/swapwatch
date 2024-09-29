@@ -65,7 +65,9 @@ SWAP_LOW_THRESHOLD = 50   # Target swap usage to achieve after actions
 ```
 ## Check Interval
 Modify the CHECK_INTERVAL to set how often (in seconds) SwapWatch checks swap usage:
-```CHECK_INTERVAL = 300  # Check every 5 minutes
+
+```
+CHECK_INTERVAL = 300  # Check every 5 minutes
 ```
 ### Usage
 Ensure Root Privileges
@@ -73,11 +75,13 @@ Ensure Root Privileges
 SwapWatch requires root privileges to restart services and drop caches. Run the script with sudo or as the root user.
 
 # Run SwapWatch
-```sudo python3 swapwatch.py
+```
+sudo python3 swapwatch.py
 ```
 ## Log File Location
 The default log file is /var/log/swapwatch.log. Ensure the script has write permissions to this location or change the path:
-```LOG_FILE = "/var/log/swapwatch.log"
+```
+LOG_FILE = "/var/log/swapwatch.log"
 ```
 
 ## License
