@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import curses
 import psutil
 import time
@@ -6,6 +7,7 @@ import logging
 from datetime import datetime
 import subprocess
 import sys
+import argparse  # Import argparse for command-line argument parsing
 
 # Logging setup
 LOG_FILE = "/var/log/swapwatch.log"
@@ -35,7 +37,7 @@ monitored_apps = {
     "nginx": ("nginx", True)  # Include nginx and combine child processes
 }
 
-# Swap thresholds
+# Default swap thresholds (can be overridden via command-line arguments)
 SWAP_HIGH_THRESHOLD = 75  # Threshold to start taking action
 SWAP_LOW_THRESHOLD = 50   # Target swap usage to achieve
 
@@ -44,6 +46,43 @@ CHECK_INTERVAL = 300
 
 # UI update interval in seconds
 UI_UPDATE_INTERVAL = 1  # Update UI every 1 second
+
+# Help text for command-line arguments
+CMD_HELP_TEXT = """
+SwapWatch Command-Line Options:
+-------------------------------
+
+Usage:
+  swapwatch.py [options]
+
+Options:
+  -h, --help            Show this help message and exit.
+  --swap-high VALUE     Set the swap high threshold percentage (default: 75).
+  --swap-low VALUE      Set the swap low threshold percentage (default: 50).
+
+Example:
+  swapwatch.py --swap-high 80 --swap-low 60
+"""
+
+# Help text for the application (displayed with '?')
+APP_HELP_TEXT = """
+SwapWatch Help Menu
+-------------------
+
+Available Commands:
+- 'q'       : Quit the application.
+- 'm'       : Open the menu to select and restart monitored applications.
+- '?'       : Display this help menu.
+- Up/Down   : Scroll through logs or navigate menus.
+- 'r'       : Restart selected service in the menu.
+- 'Esc'     : Exit from the menu or help screen.
+
+Features:
+- Real-time monitoring of memory and swap usage.
+- Automatic actions when swap usage exceeds thresholds.
+- Scrollable logs to review past actions.
+- Interactive menu to manually restart monitored services.
+"""
 
 # Initialize curses
 def init_curses():
@@ -110,49 +149,59 @@ def log_action(action, log_lines):
     # Do not call update_log_window() here
 
 # Update the log window
-def update_log_window(log_lines, bottom_win):
-    # Only update the new log lines
+def update_log_window(log_lines, bottom_win, log_scroll_pos):
     bottom_win.erase()
     bottom_win.box()
     bottom_win.addstr(0, 2, "Logs")  # Redraw the title
     log_height = bottom_win.getmaxyx()[0] - 2  # Exclude border
-    visible_logs = log_lines[-log_height:]
+    total_logs = len(log_lines)
+    # Clamp scroll position
+    if log_scroll_pos < 0:
+        log_scroll_pos = 0
+    elif log_scroll_pos > total_logs - log_height:
+        log_scroll_pos = max(total_logs - log_height, 0)
+    visible_logs = log_lines[log_scroll_pos:log_scroll_pos + log_height]
     for idx, log in enumerate(visible_logs):
         # Ensure the log line fits within the window width
         max_width = bottom_win.getmaxyx()[1] - 2
         bottom_win.addstr(1 + idx, 1, log[:max_width])
     bottom_win.refresh()
+    return log_scroll_pos
 
 # Monitor swap usage
-def monitor_swap_usage(log_lines, bottom_win):
+def monitor_swap_usage(log_lines, bottom_win, swap_high_threshold, swap_low_threshold):
     swap_percent = psutil.swap_memory().percent
-    if swap_percent >= SWAP_HIGH_THRESHOLD:
-        log_action(f"Swap usage is {swap_percent}%, which exceeds the threshold of {SWAP_HIGH_THRESHOLD}%.", log_lines)
+    if swap_percent >= swap_high_threshold:
+        log_action(f"Swap usage is {swap_percent}%, which exceeds the threshold of {swap_high_threshold}%.", log_lines)
         drop_caches(log_lines)
         time.sleep(2)
         swap_percent = psutil.swap_memory().percent
-        if swap_percent >= SWAP_LOW_THRESHOLD:
-            log_action(f"Swap usage still too high at {swap_percent}%, restarting services.", log_lines)
+        if swap_percent >= swap_low_threshold:
+            log_action(f"Swap usage still too high at {swap_percent}%, restarting services based on memory usage.", log_lines)
+            # Get applications sorted by memory usage
+            top_apps = get_top_memory_apps()
             apps_restarted = 0
-            for proc_name, (service_name, _) in monitored_apps.items():
+            for app in top_apps:
+                proc_name = app['name']
+                service_name = monitored_apps[proc_name][0]
                 restart_app(service_name, log_lines)
                 apps_restarted += 1
                 time.sleep(2)
                 swap_percent = psutil.swap_memory().percent
-                if swap_percent < SWAP_LOW_THRESHOLD:
-                    log_action(f"Done! Usage now at {swap_percent}% which is below the threshold of {SWAP_LOW_THRESHOLD}%", log_lines)
+                if swap_percent < swap_low_threshold:
+                    log_action(f"Done! Usage now at {swap_percent}% which is below the threshold of {swap_low_threshold}%", log_lines)
                     log_action("Resuming normal operations", log_lines)
                     break
                 else:
                     if apps_restarted == len(monitored_apps):
-                        log_action(f"Done! Usage now at {swap_percent}% which is still not lower than {SWAP_LOW_THRESHOLD}%", log_lines)
+                        log_action(f"Done! Usage now at {swap_percent}% which is still not lower than {swap_low_threshold}%", log_lines)
                         log_action("Resuming normal operations", log_lines)
                     else:
-                        log_action(f"Done! Usage now at {swap_percent}% but still too high", log_lines)
+                        log_action(f"Swap usage still high at {swap_percent}%, continuing to restart services.", log_lines)
         else:
-            log_action(f"Swap usage is {swap_percent}%, which is now below the target of {SWAP_LOW_THRESHOLD}%.", log_lines)
+            log_action(f"Swap usage is {swap_percent}%, which is now below the target of {swap_low_threshold}%.", log_lines)
     else:
-        log_action(f"Swap usage is {swap_percent}%, which is below the threshold of {SWAP_HIGH_THRESHOLD}%.", log_lines)
+        log_action(f"Swap usage is {swap_percent}%, which is below the threshold of {swap_high_threshold}%.", log_lines)
 
 # Set up the UI
 def setup_ui(stdscr):
@@ -241,8 +290,8 @@ def update_ui(top_left_win, top_right_win):
     top_left_win.addstr(0, 2, "Memory & Swap Usage")
 
     # Update only the usage lines without clearing the entire window
-    top_left_win.addstr(2, 2, f"Memory Usage: {mem_usage}%    ")
-    top_left_win.addstr(3, 2, f"Swap Usage: {swap_usage}%     ")
+    top_left_win.addstr(2, 2, f"Memory Usage: {mem_usage:.2f}%    ")
+    top_left_win.addstr(3, 2, f"Swap Usage: {swap_usage:.2f}%     ")
     top_left_win.refresh()
 
     # Top apps by memory usage
@@ -266,8 +315,99 @@ def update_ui(top_left_win, top_right_win):
         top_right_win.addstr(2 + idx, 2, app_name_display)
     top_right_win.refresh()
 
+# Function to draw the menu
+def draw_menu(stdscr, selected_idx):
+    # Clear the screen and refresh
+    stdscr.clear()
+    stdscr.refresh()
+    height, width = stdscr.getmaxyx()
+    menu_win = curses.newwin(height, width, 0, 0)
+    menu_win.box()
+    header = "Monitored Applications (Press 'r' to restart, 'q' or Esc to exit menu)"
+    menu_win.addstr(0, (width - len(header)) // 2, header)
+    apps = list(monitored_apps.keys())
+    max_items = height - 4  # Adjust for borders and header
+
+    # Ensure selected_idx is within the bounds
+    if selected_idx < 0:
+        selected_idx = 0
+    elif selected_idx >= len(apps):
+        selected_idx = len(apps) - 1
+
+    # Calculate start and end indices for the visible portion of the menu
+    if len(apps) <= max_items:
+        start_idx = 0
+        end_idx = len(apps)
+    else:
+        if selected_idx < max_items // 2:
+            start_idx = 0
+        elif selected_idx > len(apps) - max_items // 2:
+            start_idx = len(apps) - max_items
+        else:
+            start_idx = selected_idx - max_items // 2
+        end_idx = start_idx + max_items
+
+    display_apps = apps[start_idx:end_idx]
+    for idx, app_name in enumerate(display_apps):
+        line_num = 2 + idx
+        try:
+            if start_idx + idx == selected_idx:
+                menu_win.attron(curses.A_REVERSE)
+                menu_win.addstr(line_num, 2, app_name)
+                menu_win.attroff(curses.A_REVERSE)
+            else:
+                menu_win.addstr(line_num, 2, app_name)
+        except curses.error:
+            pass  # Ignore errors when writing outside the window bounds
+    menu_win.refresh()
+
+# Function to display help menu
+def show_help(stdscr):
+    stdscr.clear()
+    stdscr.refresh()
+    height, width = stdscr.getmaxyx()
+    help_win = curses.newwin(height, width, 0, 0)
+    help_win.box()
+    lines = APP_HELP_TEXT.strip().split('\n')
+    for idx, line in enumerate(lines):
+        try:
+            help_win.addstr(1 + idx, 2, line)
+        except curses.error:
+            pass  # Ignore errors when writing outside the window bounds
+    help_win.refresh()
+    while True:
+        key = stdscr.getch()
+        if key == ord('q') or key == 27:  # Press 'q' or Esc to exit help
+            break
+        time.sleep(0.1)
+    stdscr.clear()
+    stdscr.refresh()
+
 # Run the curses app
 def main():
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--swap-high', type=float, help='Set the swap high threshold percentage (default: 75).')
+    parser.add_argument('--swap-low', type=float, help='Set the swap low threshold percentage (default: 50).')
+    parser.add_argument('-h', '--help', action='store_true', help='Show help message and exit.')
+    args = parser.parse_args()
+
+    if args.help:
+        print(CMD_HELP_TEXT)
+        sys.exit(0)
+
+    # Set swap thresholds based on command-line arguments or use defaults
+    swap_high_threshold = args.swap_high if args.swap_high is not None else SWAP_HIGH_THRESHOLD
+    swap_low_threshold = args.swap_low if args.swap_low is not None else SWAP_LOW_THRESHOLD
+
+    # Validate swap thresholds
+    if swap_low_threshold >= swap_high_threshold:
+        print("Error: swap-low threshold must be less than swap-high threshold.")
+        sys.exit(1)
+    if not (0 <= swap_low_threshold <= 100 and 0 <= swap_high_threshold <= 100):
+        print("Error: Thresholds must be between 0 and 100.")
+        sys.exit(1)
+
     # Ensure the script is run as root
     if os.geteuid() != 0:
         print("This script must be run as root to function properly.")
@@ -275,6 +415,9 @@ def main():
 
     stdscr = init_curses()
     log_lines = []
+    log_scroll_pos = 0  # For scrolling the log window
+    in_menu = False     # Flag to indicate if we are in the menu
+    menu_selected_idx = 0  # Index of the selected menu item
 
     try:
         top_left_win, top_right_win, bottom_win = setup_ui(stdscr)
@@ -282,10 +425,10 @@ def main():
 
         # Call update_ui() immediately to display data at startup
         update_ui(top_left_win, top_right_win)
-        update_log_window(log_lines, bottom_win)  # Refresh the log window immediately
+        update_log_window(log_lines, bottom_win, log_scroll_pos)  # Refresh the log window immediately
 
         # Call monitor_swap_usage() immediately to populate logs
-        monitor_swap_usage(log_lines, bottom_win)
+        monitor_swap_usage(log_lines, bottom_win, swap_high_threshold, swap_low_threshold)
 
         last_check_time = time.time()
         last_ui_update_time = time.time()
@@ -294,19 +437,60 @@ def main():
 
             # Update UI at specified interval
             if current_time - last_ui_update_time >= UI_UPDATE_INTERVAL:
-                update_ui(top_left_win, top_right_win)
-                update_log_window(log_lines, bottom_win)
+                if not in_menu:
+                    update_ui(top_left_win, top_right_win)
+                    update_log_window(log_lines, bottom_win, log_scroll_pos)
                 last_ui_update_time = current_time
 
             # Check swap usage every CHECK_INTERVAL seconds
             if current_time - last_check_time >= CHECK_INTERVAL:
-                monitor_swap_usage(log_lines, bottom_win)
+                monitor_swap_usage(log_lines, bottom_win, swap_high_threshold, swap_low_threshold)
                 last_check_time = current_time
 
-            # Check for 'q' key press to quit the app
+            # Handle user input
             key = stdscr.getch()
+            if in_menu:
+                if key == curses.KEY_UP:
+                    menu_selected_idx = max(0, menu_selected_idx - 1)
+                    draw_menu(stdscr, menu_selected_idx)
+                elif key == curses.KEY_DOWN:
+                    menu_selected_idx = min(len(monitored_apps) - 1, menu_selected_idx + 1)
+                    draw_menu(stdscr, menu_selected_idx)
+                elif key == ord('r'):
+                    # Restart selected service
+                    proc_name = list(monitored_apps.keys())[menu_selected_idx]
+                    service_name = monitored_apps[proc_name][0]
+                    restart_app(service_name, log_lines)
+                    draw_menu(stdscr, menu_selected_idx)
+                elif key == ord('q') or key == 27:  # Escape key
+                    in_menu = False
+                    stdscr.clear()
+                    stdscr.refresh()
+                    top_left_win, top_right_win, bottom_win = setup_ui(stdscr)
+                    update_ui(top_left_win, top_right_win)
+                    update_log_window(log_lines, bottom_win, log_scroll_pos)
+                continue  # Skip the rest of the loop when in menu
+
             if key == ord('q'):
                 break
+            elif key == ord('m'):
+                in_menu = True
+                menu_selected_idx = 0
+                draw_menu(stdscr, menu_selected_idx)
+            elif key == ord('?'):
+                show_help(stdscr)
+                # After help screen, redraw the UI
+                stdscr.clear()
+                stdscr.refresh()
+                top_left_win, top_right_win, bottom_win = setup_ui(stdscr)
+                update_ui(top_left_win, top_right_win)
+                update_log_window(log_lines, bottom_win, log_scroll_pos)
+            elif key == curses.KEY_UP:
+                log_scroll_pos = max(0, log_scroll_pos - 1)
+                update_log_window(log_lines, bottom_win, log_scroll_pos)
+            elif key == curses.KEY_DOWN:
+                log_scroll_pos = min(len(log_lines), log_scroll_pos + 1)
+                update_log_window(log_lines, bottom_win, log_scroll_pos)
 
             # Short sleep to prevent high CPU usage
             time.sleep(0.1)
