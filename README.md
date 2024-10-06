@@ -4,11 +4,43 @@ SwapWatch is a Python-based monitoring tool designed to keep an eye on your syst
 
 ## Features
 
-- **Real-Time Monitoring**: Continuously monitors memory and swap usage.
-- **Automated Actions**: Drops caches and restarts specified services when swap usage exceeds defined thresholds.
-- **Curses-Based UI**: Provides a terminal-based user interface displaying system metrics and logs.
-- **Customizable Thresholds**: Allows configuration of high and low swap usage thresholds.
-- **Service Management**: Restarts services that are consuming excessive memory.
+- **Real-Time Monitoring**: Continuously monitors memory and swap usage to keep you informed of your system's performance.
+
+- **Automated Actions**:
+  - **Cache Management**: Automatically drops caches when swap usage exceeds defined thresholds.
+  - **Service Management**: Restarts specified services that are consuming excessive memory to help reduce swap usage.
+
+- **Curses-Based UI**:
+  - **Terminal Interface**: Provides a terminal-based user interface displaying system metrics and logs in real-time.
+  - **Interactive Menu**: Access an interactive menu to manually restart monitored services.
+  - **Scrollable Logs**: Review past actions by scrolling through the logs directly within the UI.
+  - **Help Menu**: Access a help screen by pressing `?`, displaying available commands and features.
+
+- **Customizable Thresholds**:
+  - **Command-Line Arguments**: Set high and low swap usage thresholds via command-line options:
+    - `--swap-high VALUE`: Set the swap high threshold percentage (default: 75%).
+    - `--swap-low VALUE`: Set the swap low threshold percentage (default: 50%).
+  - **Validation**: Ensures that thresholds are within valid ranges and that the low threshold is less than the high threshold.
+
+- **Service Management**:
+  - **Automatic Restart**: Automatically restarts services based on their memory usage when swap usage remains high after dropping caches.
+  - **Manual Control**: Use the interactive menu to manually restart monitored services at any time.
+
+- **Process Memory Calculation**:
+  - **Child Processes Inclusion**: Optionally include child processes in memory calculations for services like `nginx`.
+  - **Accurate Memory Usage**: Uses RSS (Resident Set Size) for precise memory usage reporting, avoiding double-counting shared memory.
+
+- **User Interaction**:
+  - **Keyboard Controls**:
+    - Press `m` to open the interactive menu.
+    - Use the `Up` and `Down` arrow keys to navigate through logs and menus.
+    - Press `r` to restart a selected service from the menu.
+    - Press `q` to quit the application.
+    - Press `?` to display the help menu.
+    - 
+- **Command-Line Help**:
+  - **Usage Information**: Run `swapwatch.py -h` or `swapwatch.py --help` to display command-line options and usage examples.
+
 
 ## Table of Contents
 
@@ -69,14 +101,29 @@ Modify the CHECK_INTERVAL to set how often (in seconds) SwapWatch checks swap us
 ```
 CHECK_INTERVAL = 300  # Check every 5 minutes
 ```
-### Usage
-Ensure Root Privileges
+## Usage Instructions
 
-SwapWatch requires root privileges to restart services and drop caches. Run the script with sudo or as the root user.
+1. **Make the script executable**:
 
-# Run SwapWatch
+   ```bash
+   chmod +x swapwatch.py
+## Run SwapWatch
 ```
-sudo python3 swapwatch.py
+sudo ./swapwatch.py
+```
+
+## SwapWatch Command-Line Options:
+```
+Usage:
+  swapwatch.py [options]
+
+Options:
+  -h, --help            Show this help message and exit.
+  --swap-high VALUE     Set the swap high threshold percentage (default: 75).
+  --swap-low VALUE      Set the swap low threshold percentage (default: 50).
+
+Example:
+  swapwatch.py --swap-high 80 --swap-low 60
 ```
 ## Log File Location
 The default log file is /var/log/swapwatch.log. Ensure the script has write permissions to this location or change the path:
