@@ -16,20 +16,23 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-# Monitored applications mapping: process names to service names
+# Monitored applications mapping: process names to service names and include_children flag
+# Specify which apps should include child processes
 monitored_apps = {
-    "clamd": "clamav-daemon",
-    "spamd": "spamd",
-    "dovecot": "dovecot",
-    "opendmarc": "opendmarc",
-    "kiwiirc": "kiwiirc",
-    "amavis": "amavis",
-    "postfix": "postfix",
-    "webmin": "webmin",
-    "monitorix": "monitorix",
-    "php-fpm8.2": "php8.2-fpm",
-    "php-fpm8.3": "php8.3-fpm",
-    "mariadbd": "mariadb"
+    # process_name: (service_name, include_children)
+    "clamd": ("clamav-daemon", False),
+    "spamd": ("spamd", False),
+    "dovecot": ("dovecot", False),
+    "opendmarc": ("opendmarc", False),
+    "kiwiirc": ("kiwiirc", False),
+    "amavis": ("amavis", False),
+    "postfix": ("postfix", False),
+    "webmin": ("webmin", False),
+    "monitorix": ("monitorix", False),
+    "php-fpm8.2": ("php8.2-fpm", False),
+    "php-fpm8.3": ("php8.3-fpm", False),
+    "mariadbd": ("mariadb", False),
+    "nginx": ("nginx", True)  # Include nginx and combine child processes
 }
 
 # Swap thresholds
@@ -131,7 +134,7 @@ def monitor_swap_usage(log_lines, bottom_win):
         if swap_percent >= SWAP_LOW_THRESHOLD:
             log_action(f"Swap usage still too high at {swap_percent}%, restarting services.", log_lines)
             apps_restarted = 0
-            for proc_name, service_name in monitored_apps.items():
+            for proc_name, (service_name, _) in monitored_apps.items():
                 restart_app(service_name, log_lines)
                 apps_restarted += 1
                 time.sleep(2)
@@ -186,6 +189,48 @@ def setup_ui(stdscr):
 
     return top_left_win, top_right_win, bottom_win
 
+# Get top memory apps
+def get_top_memory_apps():
+    app_memory_usage = []
+    monitored_process_names = list(monitored_apps.keys())
+    total_physical_memory = psutil.virtual_memory().total
+    app_memory = {}
+    for proc in psutil.process_iter(['pid', 'name']):
+        try:
+            proc_name = proc.info['name']
+            if proc_name in monitored_process_names:
+                include_children = monitored_apps[proc_name][1]
+                total_rss = proc.memory_info().rss
+                has_children = False
+                if include_children:
+                    children = proc.children(recursive=True)
+                    has_children = len(children) > 0
+                    for child in children:
+                        try:
+                            total_rss += child.memory_info().rss
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            continue
+                if proc_name in app_memory:
+                    app_memory[proc_name]['rss'] += total_rss
+                    app_memory[proc_name]['has_children'] = app_memory[proc_name]['has_children'] or has_children
+                else:
+                    app_memory[proc_name] = {
+                        'name': proc_name,
+                        'rss': total_rss,
+                        'include_children': include_children,
+                        'has_children': has_children
+                    }
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    # Now calculate memory_percent for each app
+    for app in app_memory.values():
+        mem_percent = (app['rss'] / total_physical_memory) * 100
+        app['memory_percent'] = mem_percent
+    # Convert to a list and sort
+    app_memory_usage = list(app_memory.values())
+    app_memory_usage.sort(key=lambda x: x['memory_percent'], reverse=True)
+    return app_memory_usage
+
 # Update dynamic data on the screen
 def update_ui(top_left_win, top_right_win):
     # Memory and Swap Usage
@@ -200,7 +245,7 @@ def update_ui(top_left_win, top_right_win):
     top_left_win.addstr(3, 2, f"Swap Usage: {swap_usage}%     ")
     top_left_win.refresh()
 
-    # Top 3 apps by memory usage
+    # Top apps by memory usage
     top_apps = get_top_memory_apps()[:3]  # Get top 3 apps
 
     # Redraw the border and title
@@ -211,21 +256,15 @@ def update_ui(top_left_win, top_right_win):
     for idx in range(3):
         # Overwrite previous data with spaces
         top_right_win.addstr(2 + idx, 2, " " * (top_right_win.getmaxyx()[1] - 4))
-    for idx, proc in enumerate(top_apps):
-        app_name = proc.info['name']
-        mem_percent = proc.info['memory_percent']
-        top_right_win.addstr(2 + idx, 2, f"{app_name}: {mem_percent:.2f}%")
+    for idx, app in enumerate(top_apps):
+        app_name = app['name']
+        mem_percent = app['memory_percent']
+        if app['include_children'] and app['has_children']:
+            app_name_display = f"{app_name}: {mem_percent:.2f}% (Children)"
+        else:
+            app_name_display = f"{app_name}: {mem_percent:.2f}%"
+        top_right_win.addstr(2 + idx, 2, app_name_display)
     top_right_win.refresh()
-
-# Get top memory apps (all monitored apps)
-def get_top_memory_apps():
-    processes = []
-    monitored_process_names = list(monitored_apps.keys())
-    for proc in psutil.process_iter(['pid', 'name', 'memory_percent']):
-        if proc.info['name'] in monitored_process_names:
-            processes.append(proc)
-    processes.sort(key=lambda p: p.info['memory_percent'], reverse=True)
-    return processes
 
 # Run the curses app
 def main():
