@@ -108,9 +108,9 @@ def get_memory_and_swap_usage():
     return mem.percent, swap.percent
 
 # Restart app
-def restart_app(service_name, log_lines):
+def restart_app(service_name, log_lines, log_scroll_pos):
     try:
-        log_action(f"Restarting service {service_name}", log_lines)
+        log_scroll_pos = log_action(f"Restarting service {service_name}", log_lines, log_scroll_pos)
         result = subprocess.run(
             ['systemctl', 'restart', service_name],
             check=True,
@@ -119,26 +119,28 @@ def restart_app(service_name, log_lines):
             stderr=subprocess.PIPE,
             text=True
         )
-        log_action(f"Service {service_name} restarted successfully.", log_lines)
+        log_scroll_pos = log_action(f"Service {service_name} restarted successfully.", log_lines, log_scroll_pos)
     except subprocess.TimeoutExpired:
-        log_action(f"Restarting {service_name} timed out.", log_lines)
+        log_scroll_pos = log_action(f"Restarting {service_name} timed out.", log_lines, log_scroll_pos)
     except subprocess.CalledProcessError as e:
-        log_action(f"Failed to restart {service_name}: {e.stderr.strip()}", log_lines)
+        log_scroll_pos = log_action(f"Failed to restart {service_name}: {e.stderr.strip()}", log_lines, log_scroll_pos)
     except Exception as e:
-        log_action(f"Unexpected error restarting {service_name}: {e}", log_lines)
+        log_scroll_pos = log_action(f"Unexpected error restarting {service_name}: {e}", log_lines, log_scroll_pos)
+    return log_scroll_pos
 
 # Drop caches
-def drop_caches(log_lines):
+def drop_caches(log_lines, log_scroll_pos):
     try:
         subprocess.run(['sync'], check=True)
         with open('/proc/sys/vm/drop_caches', 'w') as f:
             f.write('3\n')
-        log_action("Dropped caches", log_lines)
+        log_scroll_pos = log_action("Dropped caches", log_lines, log_scroll_pos)
     except Exception as e:
-        log_action(f"Failed to drop caches: {e}", log_lines)
+        log_scroll_pos = log_action(f"Failed to drop caches: {e}", log_lines, log_scroll_pos)
+    return log_scroll_pos
 
 # Log actions
-def log_action(action, log_lines):
+def log_action(action, log_lines, log_scroll_pos):
     # For curses app display, add timestamp
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     display_message = f"{timestamp} - {action}"
@@ -146,7 +148,14 @@ def log_action(action, log_lines):
     logging.info(action)
     if log_lines is not None:
         log_lines.append(display_message)
-    # Do not call update_log_window() here
+        # Adjust log_scroll_pos if the user is at the bottom
+        if 'log_lines_visible' in globals():
+            if log_scroll_pos >= len(log_lines) - (log_lines_visible + 1):
+                log_scroll_pos = len(log_lines) - log_lines_visible
+        else:
+            # If log_lines_visible is not defined yet, set log_scroll_pos to 0
+            log_scroll_pos = max(len(log_lines) - 1, 0)
+    return log_scroll_pos
 
 # Update the log window
 def update_log_window(log_lines, bottom_win, log_scroll_pos):
@@ -155,11 +164,6 @@ def update_log_window(log_lines, bottom_win, log_scroll_pos):
     bottom_win.addstr(0, 2, "Logs")  # Redraw the title
     log_height = bottom_win.getmaxyx()[0] - 2  # Exclude border
     total_logs = len(log_lines)
-    # Clamp scroll position
-    if log_scroll_pos < 0:
-        log_scroll_pos = 0
-    elif log_scroll_pos > total_logs - log_height:
-        log_scroll_pos = max(total_logs - log_height, 0)
     visible_logs = log_lines[log_scroll_pos:log_scroll_pos + log_height]
     for idx, log in enumerate(visible_logs):
         # Ensure the log line fits within the window width
@@ -169,39 +173,40 @@ def update_log_window(log_lines, bottom_win, log_scroll_pos):
     return log_scroll_pos
 
 # Monitor swap usage
-def monitor_swap_usage(log_lines, bottom_win, swap_high_threshold, swap_low_threshold):
+def monitor_swap_usage(log_lines, bottom_win, swap_high_threshold, swap_low_threshold, log_scroll_pos):
     swap_percent = psutil.swap_memory().percent
     if swap_percent >= swap_high_threshold:
-        log_action(f"Swap usage is {swap_percent}%, which exceeds the threshold of {swap_high_threshold}%.", log_lines)
-        drop_caches(log_lines)
+        log_scroll_pos = log_action(f"Swap usage is {swap_percent}%, which exceeds the threshold of {swap_high_threshold}%.", log_lines, log_scroll_pos)
+        log_scroll_pos = drop_caches(log_lines, log_scroll_pos)
         time.sleep(2)
         swap_percent = psutil.swap_memory().percent
         if swap_percent >= swap_low_threshold:
-            log_action(f"Swap usage still too high at {swap_percent}%, restarting services based on memory usage.", log_lines)
+            log_scroll_pos = log_action(f"Swap usage still too high at {swap_percent}%, restarting services based on memory usage.", log_lines, log_scroll_pos)
             # Get applications sorted by memory usage
             top_apps = get_top_memory_apps()
             apps_restarted = 0
             for app in top_apps:
                 proc_name = app['name']
                 service_name = monitored_apps[proc_name][0]
-                restart_app(service_name, log_lines)
+                log_scroll_pos = restart_app(service_name, log_lines, log_scroll_pos)
                 apps_restarted += 1
                 time.sleep(2)
                 swap_percent = psutil.swap_memory().percent
                 if swap_percent < swap_low_threshold:
-                    log_action(f"Done! Usage now at {swap_percent}% which is below the threshold of {swap_low_threshold}%", log_lines)
-                    log_action("Resuming normal operations", log_lines)
+                    log_scroll_pos = log_action(f"Done! Usage now at {swap_percent}% which is below the threshold of {swap_low_threshold}%", log_lines, log_scroll_pos)
+                    log_scroll_pos = log_action("Resuming normal operations", log_lines, log_scroll_pos)
                     break
                 else:
                     if apps_restarted == len(monitored_apps):
-                        log_action(f"Done! Usage now at {swap_percent}% which is still not lower than {swap_low_threshold}%", log_lines)
-                        log_action("Resuming normal operations", log_lines)
+                        log_scroll_pos = log_action(f"Done! Usage now at {swap_percent}% which is still not lower than {swap_low_threshold}%", log_lines, log_scroll_pos)
+                        log_scroll_pos = log_action("Resuming normal operations", log_lines, log_scroll_pos)
                     else:
-                        log_action(f"Swap usage still high at {swap_percent}%, continuing to restart services.", log_lines)
+                        log_scroll_pos = log_action(f"Swap usage still high at {swap_percent}%, continuing to restart services.", log_lines, log_scroll_pos)
         else:
-            log_action(f"Swap usage is {swap_percent}%, which is now below the target of {swap_low_threshold}%.", log_lines)
+            log_scroll_pos = log_action(f"Swap usage is {swap_percent}%, which is now below the target of {swap_low_threshold}%.", log_lines, log_scroll_pos)
     else:
-        log_action(f"Swap usage is {swap_percent}%, which is below the threshold of {swap_high_threshold}%.", log_lines)
+        log_scroll_pos = log_action(f"Swap usage is {swap_percent}%, which is below the threshold of {swap_high_threshold}%.", log_lines, log_scroll_pos)
+    return log_scroll_pos
 
 # Set up the UI
 def setup_ui(stdscr):
@@ -385,6 +390,7 @@ def show_help(stdscr):
 
 # Run the curses app
 def main():
+    global log_lines_visible  # Declare as global to access in log_action
     # Parse command-line arguments
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument('--swap-high', type=float, help='Set the swap high threshold percentage (default: 75).')
@@ -421,14 +427,20 @@ def main():
 
     try:
         top_left_win, top_right_win, bottom_win = setup_ui(stdscr)
-        log_action("Monitoring Started", log_lines)
+
+        # Determine the number of visible log lines
+        log_lines_visible = bottom_win.getmaxyx()[0] - 2  # Exclude borders
+
+        # Call log_action() after log_lines_visible is defined
+        log_scroll_pos = log_action("Monitoring Started", log_lines, log_scroll_pos)
 
         # Call update_ui() immediately to display data at startup
         update_ui(top_left_win, top_right_win)
         update_log_window(log_lines, bottom_win, log_scroll_pos)  # Refresh the log window immediately
 
         # Call monitor_swap_usage() immediately to populate logs
-        monitor_swap_usage(log_lines, bottom_win, swap_high_threshold, swap_low_threshold)
+        log_scroll_pos = monitor_swap_usage(log_lines, bottom_win, swap_high_threshold, swap_low_threshold, log_scroll_pos)
+        update_log_window(log_lines, bottom_win, log_scroll_pos)
 
         last_check_time = time.time()
         last_ui_update_time = time.time()
@@ -444,7 +456,7 @@ def main():
 
             # Check swap usage every CHECK_INTERVAL seconds
             if current_time - last_check_time >= CHECK_INTERVAL:
-                monitor_swap_usage(log_lines, bottom_win, swap_high_threshold, swap_low_threshold)
+                log_scroll_pos = monitor_swap_usage(log_lines, bottom_win, swap_high_threshold, swap_low_threshold, log_scroll_pos)
                 last_check_time = current_time
 
             # Handle user input
@@ -460,7 +472,7 @@ def main():
                     # Restart selected service
                     proc_name = list(monitored_apps.keys())[menu_selected_idx]
                     service_name = monitored_apps[proc_name][0]
-                    restart_app(service_name, log_lines)
+                    log_scroll_pos = restart_app(service_name, log_lines, log_scroll_pos)
                     draw_menu(stdscr, menu_selected_idx)
                 elif key == ord('q') or key == 27:  # Escape key
                     in_menu = False
@@ -489,7 +501,8 @@ def main():
                 log_scroll_pos = max(0, log_scroll_pos - 1)
                 update_log_window(log_lines, bottom_win, log_scroll_pos)
             elif key == curses.KEY_DOWN:
-                log_scroll_pos = min(len(log_lines), log_scroll_pos + 1)
+                max_scroll = max(len(log_lines) - log_lines_visible, 0)
+                log_scroll_pos = min(max_scroll, log_scroll_pos + 1)
                 update_log_window(log_lines, bottom_win, log_scroll_pos)
 
             # Short sleep to prevent high CPU usage
