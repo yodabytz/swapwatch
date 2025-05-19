@@ -27,7 +27,7 @@ monitored_apps = {
     "dovecot": ("dovecot", False),
     "opendmarc": ("opendmarc", False),
     "kiwiirc": ("kiwiirc", False),
-    "amavis": ("amavis", False),
+    "amavisd": ("amavis", True),
     "postfix": ("postfix", False),
     "webmin": ("webmin", False),
     "monitorix": ("monitorix", False),
@@ -254,16 +254,21 @@ def get_top_memory_apps():
             proc_name = proc.info['name']
             if proc_name in monitored_process_names:
                 include_children = monitored_apps[proc_name][1]
-                total_rss = proc.memory_info().rss
+                total_rss = 0
                 has_children = False
-                if include_children:
-                    children = proc.children(recursive=True)
-                    has_children = len(children) > 0
-                    for child in children:
-                        try:
-                            total_rss += child.memory_info().rss
-                        except (psutil.NoSuchProcess, psutil.AccessDenied):
-                            continue
+                try:
+                    total_rss = proc.memory_info().rss
+                    if include_children:
+                        children = proc.children(recursive=True)
+                        has_children = len(children) > 0
+                        for child in children:
+                            try:
+                                total_rss += child.memory_info().rss
+                            except (psutil.NoSuchProcess, psutil.AccessDenied, FileNotFoundError, ProcessLookupError):
+                                continue
+                except (psutil.NoSuchProcess, psutil.AccessDenied, FileNotFoundError, ProcessLookupError):
+                    continue
+
                 if proc_name in app_memory:
                     app_memory[proc_name]['rss'] += total_rss
                     app_memory[proc_name]['has_children'] = app_memory[proc_name]['has_children'] or has_children
@@ -274,7 +279,7 @@ def get_top_memory_apps():
                         'include_children': include_children,
                         'has_children': has_children
                     }
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except (psutil.NoSuchProcess, psutil.AccessDenied, FileNotFoundError, ProcessLookupError):
             continue
     # Now calculate memory_percent for each app
     for app in app_memory.values():
