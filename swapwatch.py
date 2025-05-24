@@ -243,42 +243,49 @@ def setup_ui(stdscr):
 
     return top_left_win, top_right_win, bottom_win
 
-# Get top memory apps
+# Get top memory apps (FIXED FUNCTION)
 def get_top_memory_apps():
     app_memory_usage = []
     monitored_process_names = list(monitored_apps.keys())
     total_physical_memory = psutil.virtual_memory().total
     app_memory = {}
-    for proc in psutil.process_iter(['pid', 'name']):
+    for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline']):
         try:
-            proc_name = proc.info['name']
-            if proc_name in monitored_process_names:
-                include_children = monitored_apps[proc_name][1]
-                total_rss = 0
-                has_children = False
-                try:
-                    total_rss = proc.memory_info().rss
-                    if include_children:
-                        children = proc.children(recursive=True)
-                        has_children = len(children) > 0
-                        for child in children:
-                            try:
-                                total_rss += child.memory_info().rss
-                            except (psutil.NoSuchProcess, psutil.AccessDenied, FileNotFoundError, ProcessLookupError):
-                                continue
-                except (psutil.NoSuchProcess, psutil.AccessDenied, FileNotFoundError, ProcessLookupError):
-                    continue
+            proc_name = proc.info['name'] or ''
+            exe = proc.info.get('exe') or ''
+            cmdline = proc.info.get('cmdline') or []
+            for mon_name in monitored_process_names:
+                if (
+                    mon_name in proc_name
+                    or mon_name in exe
+                    or any(mon_name in arg for arg in cmdline)
+                ):
+                    include_children = monitored_apps[mon_name][1]
+                    total_rss = 0
+                    has_children = False
+                    try:
+                        total_rss = proc.memory_info().rss
+                        if include_children:
+                            children = proc.children(recursive=True)
+                            has_children = len(children) > 0
+                            for child in children:
+                                try:
+                                    total_rss += child.memory_info().rss
+                                except (psutil.NoSuchProcess, psutil.AccessDenied, FileNotFoundError, ProcessLookupError):
+                                    continue
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, FileNotFoundError, ProcessLookupError):
+                        continue
 
-                if proc_name in app_memory:
-                    app_memory[proc_name]['rss'] += total_rss
-                    app_memory[proc_name]['has_children'] = app_memory[proc_name]['has_children'] or has_children
-                else:
-                    app_memory[proc_name] = {
-                        'name': proc_name,
-                        'rss': total_rss,
-                        'include_children': include_children,
-                        'has_children': has_children
-                    }
+                    if mon_name in app_memory:
+                        app_memory[mon_name]['rss'] += total_rss
+                        app_memory[mon_name]['has_children'] = app_memory[mon_name]['has_children'] or has_children
+                    else:
+                        app_memory[mon_name] = {
+                            'name': mon_name,
+                            'rss': total_rss,
+                            'include_children': include_children,
+                            'has_children': has_children
+                        }
         except (psutil.NoSuchProcess, psutil.AccessDenied, FileNotFoundError, ProcessLookupError):
             continue
     # Now calculate memory_percent for each app
