@@ -18,6 +18,17 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
+
+def apply_prlimit(pid, mem_limit_bytes):
+    """Apply virtual memory limit to a process."""
+    try:
+        subprocess.run(["prlimit", "--pid", str(pid), "--as=" + str(mem_limit_bytes)], check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        log_message(f"Failed to apply prlimit to PID {pid}: {e}")
+        return False
+
+
 # Monitored applications mapping: process names to service names and include_children flag
 # Specify which apps should include child processes
 monitored_apps = {
@@ -26,9 +37,11 @@ monitored_apps = {
     "spamd": ("spamd", False),
     "dovecot": ("dovecot", False),
     "opendmarc": ("opendmarc", False),
+    "vsftpd": ("vsftpd", False),
     "kiwiirc": ("kiwiirc", False),
     "amavisd": ("amavis", True),
     "postfix": ("postfix", False),
+    "fail2ban": ("fail2ban", False),
     "webmin": ("webmin", False),
     "monitorix": ("monitorix", False),
     "php-fpm8.2": ("php8.2-fpm", False),
@@ -38,8 +51,8 @@ monitored_apps = {
 }
 
 # Default swap thresholds (can be overridden via command-line arguments)
-SWAP_HIGH_THRESHOLD = 75  # Threshold to start taking action
-SWAP_LOW_THRESHOLD = 50   # Target swap usage to achieve
+SWAP_HIGH_THRESHOLD = 80  # Threshold to start taking action
+SWAP_LOW_THRESHOLD = 65   # Target swap usage to achieve
 
 # Check interval in seconds (5 minutes)
 CHECK_INTERVAL = 300
@@ -521,6 +534,7 @@ def main():
             time.sleep(0.1)
     finally:
         close_curses(stdscr)
+
 
 if __name__ == '__main__':
     main()
