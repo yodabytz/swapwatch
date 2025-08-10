@@ -9,10 +9,10 @@
 # purple:#bd93f9
 # red:   #ff5555
 
-background_fg = x256:231
+background_fg = x256:235
 background_bg = x256:235
 
-title_fg = x256:231
+title_fg = #f8f8f2
 title_bg = x256:235
 
 border_fg = #8be9fd
