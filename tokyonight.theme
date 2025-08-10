@@ -1,0 +1,30 @@
+# Tokyo Night (xterm-256 approximations)
+# Allowed values: basic names, x256:<index>, or #RRGGBB
+# bg:   #1a1b26 -> x256:234
+# fg:   #c0caf5 -> x256:189
+# blue: #7aa2f7 -> x256:111
+# cyan: #7dcfff -> x256:117
+# mag:  #bb9af7 -> x256:141
+# yel:  #e0af68 -> x256:179
+# grn:  #9ece6a -> x256:149
+# red:  #f7768e -> x256:210
+# border accent: ~ #2ac3de -> x256:81 (cyan-ish)
+
+background_fg = x256:189
+background_bg = x256:234
+
+title_fg = x256:189
+title_bg = x256:234
+
+border_fg = x256:81
+
+timestamp_fg = x256:179
+swap_label_fg = x256:141
+percent_ok_fg = x256:149
+percent_high_fg = x256:210
+mem_label_fg = x256:117
+log_text_fg = x256:189
+
+menu_text_fg = x256:189
+menu_hl_fg   = x256:234
+menu_hl_bg   = x256:111
