@@ -1,0 +1,29 @@
+# Dracula (accurate dark background via xterm-256 indices)
+# bg: #282a36 ≈ x256:235
+# fg: #f8f8f2 ≈ x256:231
+# cyan:  #8be9fd
+# green: #50fa7b
+# yellow:#f1fa8c
+# orange:#ffb86c
+# pink:  #ff79c6
+# purple:#bd93f9
+# red:   #ff5555
+
+background_fg = x256:231
+background_bg = x256:235
+
+title_fg = x256:231
+title_bg = x256:235
+
+border_fg = #8be9fd
+
+timestamp_fg = #f1fa8c
+swap_label_fg = #ff79c6
+percent_ok_fg = #50fa7b
+percent_high_fg = #ff5555
+mem_label_fg = #bd93f9
+log_text_fg = x256:231
+
+menu_text_fg = x256:231
+menu_hl_fg   = x256:235
+menu_hl_bg   = #8be9fd
