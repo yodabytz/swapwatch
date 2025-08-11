@@ -11,10 +11,10 @@
 # border accent: ~ #2ac3de -> x256:81 (cyan-ish)
 
 background_fg = x256:189
-background_bg = x256:234
+background_bg = x256:236
 
 title_fg = x256:189
-title_bg = x256:234
+title_bg = x256:236
 
 border_fg = x256:81
 
