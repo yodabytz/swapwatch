@@ -1,6 +1,7 @@
 # SwapWatch 1.0
 
 SwapWatch is a Python-based monitoring tool designed to keep an eye on your system's swap usage and take corrective actions when necessary. It provides a real-time, curses-based user interface that displays memory and swap usage, top memory-consuming applications, and logs of actions taken. SwapWatch helps prevent your system from becoming unresponsive due to high swap usage by automatically dropping caches and restarting services when thresholds are exceeded. The interface is fully themeable, allowing you to customize colors for a personalized look and better readability.
+<img src="https://raw.githubusercontent.com/yodabytz/swapwatch/refs/heads/main/logo.png?raw=true" width="600">
 
 ## Features
 
