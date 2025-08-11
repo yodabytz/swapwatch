@@ -69,8 +69,8 @@ SwapWatch is a Python-based monitoring tool designed to keep an eye on your syst
    ```bash
    git clone https://github.com/yodabytz/swapwatch.git
    cd swapwatch
-   mkdir -p /etc/swapwatch/themes/
-   cp *.themes /etc/swapwatch/themes/
+   sudo mkdir -p /etc/swapwatch/themes/
+   sudo cp *.themes /etc/swapwatch/themes/
 
    pip3 install psutil
    ```
