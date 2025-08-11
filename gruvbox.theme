@@ -1,0 +1,40 @@
+# Gruvbox Dark (xterm-256 accurate mappings from your palette)
+
+# Base
+# dark0       #282828 -> x256:235
+# light1      #ebdbb2 -> x256:223
+
+background_fg = x256:223
+background_bg = x256:235
+
+title_fg = x256:223
+title_bg = x256:235
+
+# Borders / accents
+# bright_blue #83a598 -> x256:109
+border_fg = x256:109
+
+# Text roles
+# timestamp   bright_yellow #f1fa8c isn't gruvbox; using bright_yellow #fabd2f -> x256:214
+timestamp_fg = x256:214
+
+# swap label (use bright_purple) #d3869b -> x256:175
+swap_label_fg = x256:175
+
+# percentages
+# OK: bright_green #b8bb26 -> x256:142
+percent_ok_fg = x256:142
+# High: bright_red #fb4934 -> x256:167
+percent_high_fg = x256:167
+
+# memory label (use bright_aqua) #8ec07c -> x256:108
+mem_label_fg = x256:108
+
+# log text uses light1
+log_text_fg = x256:223
+
+# Menu
+menu_text_fg = x256:223
+# highlight: dark fg on bright_blue bg
+menu_hl_fg   = x256:235
+menu_hl_bg   = x256:109
