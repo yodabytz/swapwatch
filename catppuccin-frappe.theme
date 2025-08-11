@@ -1,0 +1,43 @@
+# Catppuccin Frappe (xterm-256 approximations)
+
+# Base
+# Base       #303446 -> x256:237
+# Text       #c6d0f5 -> x256:189
+
+background_fg = x256:189
+background_bg = x256:237
+
+title_fg = x256:189
+title_bg = x256:237
+
+# Borders / accents
+# Sapphire   #85c1dc -> x256:110
+border_fg = x256:110
+
+# Text roles
+# Yellow     #e5c890 -> x256:179
+timestamp_fg = x256:179
+
+# Mauve      #ca9ee6 -> x256:183
+swap_label_fg = x256:183
+
+# Percentages
+# OK: Green  #a6d189 -> x256:150
+percent_ok_fg = x256:150
+# High: Red  #e78284 -> x256:174
+percent_high_fg = x256:174
+
+# Memory label
+# Sky        #99d1db -> x256:152
+mem_label_fg = x256:152
+
+# Log text
+log_text_fg = x256:189
+
+# Menu
+menu_text_fg = x256:189
+# Highlight: dark fg on Blue bg
+# Crust      #232634 -> x256:235
+# Blue       #8caaee -> x256:111
+menu_hl_fg   = x256:235
+menu_hl_bg   = x256:111
