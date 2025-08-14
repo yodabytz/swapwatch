@@ -75,6 +75,68 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
+# ============== OSC 11 TRUECOLOR BACKGROUND SUPPORT ==============
+CSI = "\x1b["
+OSC = "\x1b]"
+BEL = "\x07"
+
+def _rgb_to_hex(r, g, b):
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+def _x256_to_rgb(n):
+    # xterm-256 → RGB
+    n = max(0, min(255, int(n)))
+    if 16 <= n <= 231:
+        n -= 16
+        r = (n // 36) % 6
+        g = (n // 6) % 6
+        b = n % 6
+        table = [0, 95, 135, 175, 215, 255]
+        return (table[r], table[g], table[b])
+    if 232 <= n <= 255:
+        g = 8 + (n - 232) * 10
+        return (g, g, g)
+    basic = {
+        0:(0,0,0), 1:(205,0,0), 2:(0,205,0), 3:(205,205,0),
+        4:(0,0,238), 5:(205,0,205), 6:(0,205,205), 7:(229,229,229),
+        8:(127,127,127), 9:(255,0,0), 10:(0,255,0), 11:(255,255,0),
+        12:(92,92,255), 13:(255,0,255), 14:(0,255,255), 15:(255,255,255)
+    }
+    return basic.get(n, (0,0,0))
+
+def _named_to_rgb(name):
+    m = {
+        "black":(0,0,0),"red":(255,0,0),"green":(0,255,0),"yellow":(255,255,0),
+        "blue":(0,0,255),"magenta":(255,0,255),"cyan":(0,255,255),"white":(255,255,255)
+    }
+    return m.get(name.lower(), (0,0,0))
+
+def value_to_hex(v):
+    """theme value -> #RRGGBB"""
+    if not v: return "#000000"
+    v = v.strip().lower()
+    if v.startswith("#") and len(v) == 7:
+        return v
+    if v.startswith("x256:"):
+        try:
+            n = int(v.split(":",1)[1])
+        except Exception:
+            n = 0
+        r,g,b = _x256_to_rgb(n)
+        return _rgb_to_hex(r,g,b)
+    if v in COLOR_NAME_MAP:
+        r,g,b = _named_to_rgb(v)
+        return _rgb_to_hex(r,g,b)
+    return "#000000"
+
+def osc11_set_bg(hex_rgb):
+    """Set terminal default background to hex (#RRGGBB) using OSC 11."""
+    try:
+        os.write(sys.stdout.fileno(), (f"{OSC}11;{hex_rgb}{BEL}").encode("utf-8"))
+    except Exception:
+        pass
+# ================================================================
+
 
 def apply_prlimit(pid, mem_limit_bytes):
     """Apply virtual memory limit to a process."""
@@ -268,48 +330,56 @@ def color_attr_for(role):
 def init_color_pairs(theme_values):
     """
     Register color pairs for roles based on foreground and background where applicable.
+    Use -1 (terminal default bg) for most backgrounds so OSC 11 truecolor shows.
+    Keep explicit bg only for highlight pair.
     """
     global COLOR_PAIRS
     COLOR_PAIRS.clear()
     pair_id = 1
 
-    def mkpair(role, fg_key, bg_key=None):
+    def mkpair(role, fg_key, bg_key=None, force_bg=False):
         nonlocal pair_id
         fg_num = get_color_number(theme_values.get(fg_key, "white"))
-        bg_val = theme_values.get(bg_key, "black") if bg_key else "black"
-        bg_num = get_color_number(bg_val)
+        if force_bg and bg_key:
+            bg_num = get_color_number(theme_values.get(bg_key, "black"))
+        else:
+            # inherit terminal default background (truecolor from OSC 11)
+            bg_num = -1
         try:
             curses.init_pair(pair_id, fg_num, bg_num)
         except curses.error:
-            curses.init_pair(pair_id, COLOR_NAME_MAP["white"], COLOR_NAME_MAP["black"])
+            curses.init_pair(pair_id, COLOR_NAME_MAP["white"], -1)
         COLOR_PAIRS[role] = pair_id
         pair_id += 1
 
-    # Background (fg+bg) for whole windows/screens
-    mkpair("background", "background_fg", "background_bg")
+    # Background (text on default bg)
+    mkpair("background", "background_fg", "background_bg", force_bg=False)
 
-    # Title (fg + bg)
-    mkpair("title", "title_fg", "title_bg")
-    # Borders (fg only; bg = background_bg so it blends)
-    mkpair("border", "border_fg", "background_bg")
+    # Title (text on default bg)
+    mkpair("title", "title_fg", "title_bg", force_bg=False)
+    # Borders (fg only)
+    mkpair("border", "border_fg", "background_bg", force_bg=False)
     # Timestamp
-    mkpair("timestamp", "timestamp_fg", "background_bg")
+    mkpair("timestamp", "timestamp_fg", "background_bg", force_bg=False)
     # Labels
-    mkpair("swap_label", "swap_label_fg", "background_bg")
-    mkpair("mem_label", "mem_label_fg", "background_bg")
+    mkpair("swap_label", "swap_label_fg", "background_bg", force_bg=False)
+    mkpair("mem_label", "mem_label_fg", "background_bg", force_bg=False)
     # Percentages
-    mkpair("percent_ok", "percent_ok_fg", "background_bg")
-    mkpair("percent_high", "percent_high_fg", "background_bg")
+    mkpair("percent_ok", "percent_ok_fg", "background_bg", force_bg=False)
+    mkpair("percent_high", "percent_high_fg", "background_bg", force_bg=False)
     # Log text
-    mkpair("log_text", "log_text_fg", "background_bg")
+    mkpair("log_text", "log_text_fg", "background_bg", force_bg=False)
     # Menu text
-    mkpair("menu_text", "menu_text_fg", "background_bg")
-    # Menu highlight (fg + bg)
-    mkpair("menu_hl", "menu_hl_fg", "menu_hl_bg")
+    mkpair("menu_text", "menu_text_fg", "background_bg", force_bg=False)
+    # Menu highlight (explicit bg so selection stands out)
+    mkpair("menu_hl", "menu_hl_fg", "menu_hl_bg", force_bg=True)
 
 
 def apply_theme(theme_values):
-    """Apply theme values to curses color pairs (if colors enabled)."""
+    """Apply theme values to curses color pairs (if colors enabled) and OSC bg."""
+    # Set terminal default background to truecolor (OSC 11) from theme bg
+    hex_bg = value_to_hex(theme_values.get("background_bg", "black"))
+    osc11_set_bg(hex_bg)
     if COLORS_ENABLED:
         init_color_pairs(theme_values)
 
@@ -338,7 +408,7 @@ def init_curses():
         if curses.has_colors():
             curses.start_color()
             try:
-                curses.use_default_colors()
+                curses.use_default_colors()  # enable -1 (terminal default bg)
             except curses.error:
                 pass
             COLORS_ENABLED = True
@@ -525,7 +595,7 @@ def monitor_swap_usage(log_lines, bottom_win, swap_high_threshold, swap_low_thre
 def setup_ui(stdscr):
     height, width = stdscr.getmaxyx()
 
-    # Apply background theme to stdscr
+    # Apply background theme to stdscr via default bg (-1) so OSC 11 shows
     stdscr.bkgd(' ', color_attr_for("background"))
     stdscr.erase()
 
@@ -546,7 +616,7 @@ def setup_ui(stdscr):
     top_right_win = curses.newwin(top_right_h, top_right_w, 2, top_left_w)
     bottom_win = curses.newwin(bottom_h, width, top_left_h + 2, 0)
 
-    # Themed backgrounds for windows
+    # Themed backgrounds for windows (inherit default bg)
     for w in (top_left_win, top_right_win, bottom_win):
         w.bkgd(' ', color_attr_for("background"))
 
@@ -870,9 +940,16 @@ def main():
         print("This script must be run as root to function properly.")
         sys.exit(1)
 
+    # BEFORE drawing anything: set terminal default bg to theme truecolor
+    # (We don't know theme yet; set a sane dark fallback to avoid flash)
+    try:
+        osc11_set_bg("#1b1b27")  # dark fallback until theme loads
+    except Exception:
+        pass
+
     stdscr = init_curses()
 
-    # Load theme (try default if present)
+    # Load theme (try default if present) and apply OSC 11 + pairs
     theme_values = DEFAULT_THEME_VALUES.copy()
     if COLORS_ENABLED:
         themes_available = list_theme_files()
@@ -880,6 +957,9 @@ def main():
             theme_values = load_theme_by_name(DEFAULT_THEME_NAME)
         else:
             apply_theme(theme_values)
+    else:
+        # still set bgcolor from defaults so background is dark even without curses colors
+        osc11_set_bg(value_to_hex(theme_values.get("background_bg", "black")))
 
     log_lines = []
     log_scroll_pos = 0  # For scrolling the log window
@@ -947,7 +1027,7 @@ def main():
                     theme_win = draw_theme_dialog(stdscr, theme_selected_idx, themes, theme_win)
                 elif key in (10, 13, curses.KEY_ENTER):
                     chosen = themes[theme_selected_idx]
-                    theme_values = load_theme_by_name(chosen)
+                    theme_values = load_theme_by_name(chosen)  # re-sets OSC 11 + pairs
                     # Repaint main UI with new background/colors
                     in_theme = False
                     theme_win = None
@@ -1014,8 +1094,10 @@ def main():
 
             time.sleep(0.1)
     finally:
+        # Do not spam resets; leave terminal bg as-is (same pane/session).
         close_curses(stdscr)
 
 
 if __name__ == '__main__':
     main()
+
