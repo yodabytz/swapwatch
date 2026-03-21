@@ -1,10 +1,16 @@
-# ⏱️💾 SwapWatch 2.0
+# ⏱️💾 SwapWatch 2.1
 
-**SwapWatch 2.0** is a highly optimized Python-based monitoring tool designed to intelligently manage your system's swap usage and take corrective actions when necessary. It features a real-time, curses-based user interface with **smart caching**, **adaptive performance optimization**, and **colorful visual feedback**. SwapWatch 2.0 is specifically optimized for VPS environments and provides **80-90% better performance** than the original version.
+**SwapWatch 2.1** is a highly optimized Python-based monitoring tool designed to intelligently manage your system's swap usage and take corrective actions when necessary. It features a real-time, curses-based user interface with **smart caching**, **adaptive performance optimization**, and **colorful visual feedback**. SwapWatch 2.1 is specifically optimized for VPS environments and provides **80-90% better performance** than the original version.
 
 <img src="https://raw.githubusercontent.com/yodabytz/swapwatch/refs/heads/main/logo.png?raw=true" align="center" width="300">
 
-## 🚀 What's New in SwapWatch 2.0
+## 🚀 What's New in SwapWatch 2.1
+
+### **Smart Culprit Detection**
+- **System-Wide Process Scanning**: Scans ALL running processes to identify the real swap culprit, not just monitored services
+- **No More Blind Restarts**: Won't restart monitored services when an unmonitored process is the actual problem
+- **Interactive Prompt**: When an unmonitored process is the top swap consumer, prompts the user to restart, kill, or skip it
+- **Accurate Attribution**: Clearly identifies and displays the offending process name, swap usage, and PIDs
 
 ### **Major Performance Overhaul**
 - **PID Caching System**: Reduces expensive process scans by 90%
@@ -19,6 +25,7 @@
 - **VPS-Optimized**: Handles permission restrictions gracefully
 
 ### **Visual & User Experience Improvements**
+- **Tokyo Night Moon Theme**: Truecolor background support with accurate Tokyo Night Moon colors
 - **Colorful Log Messages**: Color-coded logs with green (good), red (warning), yellow (thresholds), and cyan (targets)
 - **Adaptive UI Updates**: Intelligently adjusts refresh rates from 1s to 3s for better efficiency
 - **Force Refresh**: Press 'c' to instantly update all cached data
@@ -28,12 +35,14 @@
 
 ### **🔍 Intelligent Monitoring**
 - **Real-Time Swap Tracking**: Monitors swap usage with precision using `/proc/PID/status`
+- **Smart Culprit Detection**: Scans all system processes to find the real swap offender before taking action
 - **Smart Process Detection**: Efficiently identifies monitored applications with intelligent caching
 - **Performance Analytics**: Displays cache hit rates, adaptive timing, and system efficiency metrics
 
 ### **⚡ Automated Actions**
 - **Smart Cache Management**: Only logs cache clearing when effective (handles VPS restrictions)
-- **Swap-Targeted Restarts**: Prioritizes highest swap-using processes for restart decisions
+- **Culprit-Aware Restarts**: Only restarts monitored services when they are actually the cause of high swap
+- **Interactive Kill/Restart**: Prompts user with options when an unmonitored process is the problem
 - **Threshold-Based Actions**: Configurable high/low thresholds with intelligent hysteresis
 
 ### **🎨 Advanced Interface**
@@ -48,6 +57,8 @@
   - `m` - Service management menu
   - `t` - Theme selector
   - `c` - Force cache refresh
+  - `d` - Process detail view
+  - `/` - Search logs
   - `?` - Help system
   - Arrow keys - Navigation
   - `q` - Quit
@@ -160,6 +171,8 @@ sudo ./swapwatch.py --swap-high 85 --swap-low 70
 - **`m`** - Open service management menu
 - **`t`** - Theme selector
 - **`c`** - Force cache refresh for immediate data update
+- **`d`** - Process detail view (select app, then Enter for details)
+- **`/`** - Search through logs (`n`/`N` to navigate matches)
 - **`?`** - Display help menu
 - **`q`** - Quit application
 - **↑/↓** - Navigate logs/menus
@@ -182,6 +195,7 @@ Perf: 87% cache hits, 15s adaptive cache
 - **VPS-optimized** resource usage patterns
 
 ### **Smart Behaviors**
+- **Culprit Detection**: Identifies the real swap offender before restarting anything
 - **Stress Detection**: Shortens cache time when system is under load
 - **Idle Optimization**: Extends cache time when system is quiet
 - **Batch Processing**: Single-pass data collection for efficiency
@@ -194,15 +208,17 @@ Place `.theme` files in `/etc/swapwatch/themes/`:
 
 ```ini
 # example.theme
-background_bg=black
+background_bg=#222436
 title_fg=cyan
 swap_label_fg=magenta
 percent_ok_fg=green
 percent_high_fg=red
 ```
 
+Supports named colors, `x256:<index>`, and `#RRGGBB` truecolor hex values.
+
 ### **Log Colors**
-SwapWatch 2.0 features intelligent color coding:
+SwapWatch 2.1 features intelligent color coding:
 - 🟢 **Green**: Normal values, success states
 - 🔴 **Red**: Warning values, problem conditions
 - 🟡 **Yellow**: Threshold values
@@ -221,7 +237,7 @@ LOG_FILE = "/var/log/swapwatch.log"
 
 ### **VPS Permission Issues**
 If cache clearing fails on VPS:
-- SwapWatch 2.0 handles this gracefully
+- SwapWatch 2.1 handles this gracefully
 - Only logs success when cache clearing actually works
 - No false positive messages
 
@@ -236,12 +252,13 @@ SwapWatch is released under the MIT License.
 
 ---
 
-## 🔄 Upgrade from 1.0 to 2.0
+## 🔄 Upgrade from 2.0 to 2.1
 
-SwapWatch 2.0 is a drop-in replacement with:
+SwapWatch 2.1 is a drop-in replacement with:
+- **Smart culprit detection** - no more blind restarts of innocent services
+- **Interactive prompts** - choose to restart, kill, or skip unmonitored offenders
+- **Tokyo Night Moon theme** - correct truecolor background
 - **Same configuration format** - no changes needed
-- **Enhanced performance** - automatic optimization
-- **New features** - optional to use
-- **Backward compatibility** - all 1.0 features preserved
+- **Backward compatibility** - all 2.0 features preserved
 
-Simply replace your existing `swapwatch.py` with the 2.0 version!
+Simply replace your existing `swapwatch.py` with the 2.1 version!
