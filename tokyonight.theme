@@ -1,18 +1,18 @@
-# Tokyo Night (xterm-256 approximations)
+# Tokyo Night Moon (truecolor)
 # Allowed values: basic names, x256:<index>, or #RRGGBB
-# bg:   #24283b -> x256:236
-# fg:   #c0caf5 -> x256:189
-# blue: #7aa2f7 -> x256:111
-# cyan: #7dcfff -> x256:117
-# mag:  #bb9af7 -> x256:141
-# yel:  #e0af68 -> x256:179
-# grn:  #9ece6a -> x256:149
-# red:  #f7768e -> x256:210
+# bg:   #222436 (Moon variant background)
+# fg:   #c8d3f5 -> x256:189
+# blue: #82aaff -> x256:111
+# cyan: #86e1fc -> x256:117
+# mag:  #c099ff -> x256:141
+# yel:  #ffc777 -> x256:179
+# grn:  #c3e88d -> x256:149
+# red:  #ff757f -> x256:210
 # border accent: ~ #2ac3de -> x256:81 (cyan-ish)
 
-background_fg = x256:236
-background_bg = #141723
-title_bg = #141723
+background_fg = x256:189
+background_bg = #222436
+title_bg = #222436
 title_fg = x256:189
 
 border_fg = x256:81

@@ -2107,7 +2107,7 @@ def main() -> None:
     # BEFORE drawing anything: set terminal default bg to theme truecolor
     # (We don't know theme yet; set a sane dark fallback to avoid flash)
     try:
-        osc11_set_bg("#1b1b27")  # dark fallback until theme loads
+        osc11_set_bg("#222436")  # Tokyo Night Moon fallback until theme loads
     except Exception:
         pass
 
