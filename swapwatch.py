@@ -516,7 +516,7 @@ Example:
 
 # Help text for the application (displayed with '?')
 APP_HELP_TEXT = """
-SwapWatch 2.0 Help Menu
+SwapWatch 2.1 Help Menu
 ------------------------
 
 Available Commands:
@@ -531,14 +531,16 @@ Available Commands:
 
 Features:
 - Real-time monitoring of swap usage (not just memory!).
+- Smart culprit detection: scans ALL processes to find the real cause.
+- Won't blindly restart services if an unmonitored app is the problem.
+- Interactive prompt to restart, kill, or skip unmonitored culprits.
 - Smart caching system for 80%+ better performance.
 - Top 10 swap-using applications display with auto-scroll.
 - VPS-optimized with intelligent cache clearing detection.
-- Targets highest swap users for restart decisions.
 - Performance statistics display showing cache efficiency.
 - Themeable UI loaded from /etc/swapwatch/themes/*.theme
 
-Performance Optimizations (v2.0):
+Performance Optimizations (v2.1):
 - PID caching reduces process scans by 90%
 - Batch /proc file reading minimizes I/O operations
 - Smart refresh intervals adapt to data change frequency
@@ -1432,7 +1434,7 @@ def setup_ui(stdscr: 'curses.window') -> Tuple['curses.window', 'curses.window',
     stdscr.erase()
 
     # Title
-    title = "SwapWatch 2.0"
+    title = "SwapWatch 2.1"
     title_attr = color_attr_for("title") | curses.A_BOLD
     stdscr.addstr(0, max(0, (width - len(title)) // 2), title, title_attr)
     stdscr.refresh()
@@ -2141,7 +2143,7 @@ def main() -> None:
         log_lines_visible = bottom_win.getmaxyx()[0] - 2  # Exclude borders
 
         # Initial logs/UI
-        log_scroll_pos = log_action("SwapWatch 2.0 - Optimized monitoring started", log_lines, log_scroll_pos)
+        log_scroll_pos = log_action("SwapWatch 2.1 - Optimized monitoring started", log_lines, log_scroll_pos)
         log_scroll_pos = log_action("Performance features: PID caching, batch I/O, smart refresh", log_lines, log_scroll_pos)
         update_ui(top_left_win, top_right_win)
         update_log_window(log_lines, bottom_win, log_scroll_pos)
