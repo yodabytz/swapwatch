@@ -1286,8 +1286,13 @@ def _wait_for_dismiss(stdscr: 'curses.window') -> None:
 def monitor_swap_usage(log_lines: List[str], bottom_win: 'curses.window',
                        swap_high_threshold: float, swap_low_threshold: float,
                        log_scroll_pos: int, alert_manager: Optional['AlertManager'] = None,
-                       metrics_db: Optional['MetricsDB'] = None) -> int:
+                       metrics_db: Optional['MetricsDB'] = None,
+                       stdscr: Optional['curses.window'] = None) -> int:
     """Check swap usage and restart services if thresholds are exceeded.
+
+    Scans all system processes to identify the real culprit. If the top swap
+    consumer is not a monitored service, prompts the user before taking action
+    instead of blindly restarting monitored apps.
 
     Returns:
         Updated log scroll position.
@@ -1308,12 +1313,71 @@ def monitor_swap_usage(log_lines: List[str], bottom_win: 'curses.window',
         time.sleep(2)
         swap_percent = psutil.swap_memory().percent
         if swap_percent >= swap_low_threshold:
+            # Scan ALL processes to find the real culprit
+            all_users = get_all_swap_users()
+
+            if all_users:
+                top_culprit = all_users[0]
+
+                if not top_culprit['is_monitored']:
+                    # The biggest swap consumer is NOT a monitored service
+                    swap_mb = top_culprit['swap_bytes'] / (1024 * 1024)
+                    log_scroll_pos = log_action(
+                        f"[RED]Top swap culprit is unmonitored:[/RED] [YELLOW]{top_culprit['name']}[/YELLOW] "
+                        f"using [RED]{top_culprit['swap_percent']:.1f}%[/RED] ({swap_mb:.1f} MB) of swap",
+                        log_lines, log_scroll_pos
+                    )
+                    log_scroll_pos = log_action(
+                        f"Monitored services are [GREEN]not the primary cause[/GREEN] - skipping automatic restarts",
+                        log_lines, log_scroll_pos
+                    )
+                    update_log_window(log_lines, bottom_win, log_scroll_pos)
+
+                    # Prompt user for action if we have a screen handle
+                    if stdscr:
+                        action = prompt_culprit_action(stdscr, top_culprit)
+
+                        if action == 'kill':
+                            for pid in top_culprit['pids']:
+                                try:
+                                    os.kill(pid, signal.SIGKILL)
+                                except (ProcessLookupError, PermissionError) as e:
+                                    log_scroll_pos = log_action(
+                                        f"Failed to kill PID {pid}: {e}", log_lines, log_scroll_pos
+                                    )
+                            log_scroll_pos = log_action(
+                                f"[YELLOW]Killed[/YELLOW] process [CYAN]{top_culprit['name']}[/CYAN] "
+                                f"({len(top_culprit['pids'])} PIDs)",
+                                log_lines, log_scroll_pos
+                            )
+                            if metrics_db:
+                                metrics_db.record_action("kill", top_culprit['name'], "user_requested")
+
+                        elif action == 'restart':
+                            # Try systemctl restart with the process name
+                            service_guess = top_culprit['name']
+                            log_scroll_pos = restart_app(service_guess, log_lines, log_scroll_pos, metrics_db)
+
+                        else:
+                            log_scroll_pos = log_action(
+                                f"User chose to skip action on [YELLOW]{top_culprit['name']}[/YELLOW]",
+                                log_lines, log_scroll_pos
+                            )
+                    else:
+                        log_scroll_pos = log_action(
+                            "No interactive session available - skipping action on unmonitored process",
+                            log_lines, log_scroll_pos
+                        )
+
+                    log_scroll_pos = log_action("Resuming normal operations", log_lines, log_scroll_pos)
+                    return log_scroll_pos
+
+            # The top culprit IS a monitored service (or all top users are monitored)
+            # Proceed with normal monitored-app restarts
             log_scroll_pos = log_action(
-                f"Swap usage still too high at {swap_percent}%, restarting services based on swap usage.",
+                f"Swap usage still too high at {swap_percent}%, restarting monitored services based on swap usage.",
                 log_lines, log_scroll_pos
             )
-            # Get applications sorted by swap usage (highest swap users first)
-            # Force refresh during monitoring to get most current data
             top_apps = get_top_swap_apps(force_refresh=True)
             apps_restarted = 0
             for app in top_apps:
@@ -1599,6 +1663,149 @@ def get_top_swap_apps(force_refresh: bool = False) -> List[dict]:
         _performance_stats['adaptive_cache_time'] = min(30, _performance_stats['adaptive_cache_time'] + 2)
 
     return app_swap_usage
+
+
+def get_all_swap_users(top_n: int = 20) -> List[dict]:
+    """Scan ALL processes on the system for swap usage, not just monitored ones.
+
+    Returns a sorted list of the top swap-consuming processes with a flag
+    indicating whether each is a monitored app or not.
+    """
+    global _performance_stats
+
+    total_swap = psutil.swap_memory().total
+    if total_swap == 0:
+        return []
+
+    # Build a set of monitored process names for quick lookup
+    monitored_lower = {name.lower(): name for name in monitored_apps}
+
+    # Group processes by name, summing swap across PIDs
+    proc_swap: Dict[str, dict] = {}
+
+    for proc in psutil.process_iter(['pid', 'name']):
+        try:
+            pid = proc.info['pid']
+            proc_name = proc.info['name'] or ''
+            if not proc_name or pid in (0, 1):
+                continue
+
+            # Read swap from /proc
+            swap_bytes = 0
+            try:
+                _performance_stats['file_reads'] += 1
+                with open(f'/proc/{pid}/status', 'r') as f:
+                    for line in f:
+                        if line.startswith('VmSwap:'):
+                            parts = line.split()
+                            if len(parts) >= 2 and parts[1].isdigit():
+                                swap_bytes = int(parts[1]) * 1024
+                            break
+            except (FileNotFoundError, PermissionError, OSError):
+                continue
+
+            if swap_bytes == 0:
+                continue
+
+            # Group by process name
+            if proc_name not in proc_swap:
+                # Check if this process matches any monitored app
+                is_monitored = False
+                monitored_key = None
+                proc_name_lower = proc_name.lower()
+                for mon_lower, mon_orig in monitored_lower.items():
+                    if mon_lower in proc_name_lower or proc_name_lower in mon_lower:
+                        is_monitored = True
+                        monitored_key = mon_orig
+                        break
+
+                proc_swap[proc_name] = {
+                    'name': proc_name,
+                    'swap_bytes': 0,
+                    'pids': [],
+                    'is_monitored': is_monitored,
+                    'monitored_key': monitored_key,
+                }
+
+            proc_swap[proc_name]['swap_bytes'] += swap_bytes
+            proc_swap[proc_name]['pids'].append(pid)
+
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    # Calculate percentages and sort
+    result = []
+    for info in proc_swap.values():
+        info['swap_percent'] = (info['swap_bytes'] / total_swap) * 100 if total_swap else 0.0
+        result.append(info)
+
+    result.sort(key=lambda x: x['swap_percent'], reverse=True)
+    return result[:top_n]
+
+
+def prompt_culprit_action(stdscr: 'curses.window', culprit: dict) -> str:
+    """Show a blocking curses dialog when an unmonitored process is the top swap user.
+
+    Returns one of: 'restart', 'kill', 'skip'
+    """
+    height, width = stdscr.getmaxyx()
+    dialog_h = 12
+    dialog_w = min(70, width - 4)
+    start_y = max(0, (height - dialog_h) // 2)
+    start_x = max(0, (width - dialog_w) // 2)
+
+    win = curses.newwin(dialog_h, dialog_w, start_y, start_x)
+    win.bkgd(' ', color_attr_for("background"))
+    if COLORS_ENABLED:
+        win.attron(color_attr_for("border"))
+    win.box()
+    if COLORS_ENABLED:
+        win.attroff(color_attr_for("border"))
+
+    title = "Unmonitored Process Detected"
+    title_attr = color_attr_for("title") | curses.A_BOLD
+    warn_attr = color_attr_for("percent_high") | curses.A_BOLD
+    label_attr = color_attr_for("mem_label") | curses.A_BOLD
+    text_attr = color_attr_for("log_text")
+    ok_attr = color_attr_for("percent_ok") | curses.A_BOLD
+
+    try:
+        win.addstr(0, max(2, (dialog_w - len(title)) // 2), title, title_attr)
+
+        swap_mb = culprit['swap_bytes'] / (1024 * 1024)
+        pid_str = ", ".join(str(p) for p in culprit['pids'][:5])
+        if len(culprit['pids']) > 5:
+            pid_str += f" (+{len(culprit['pids']) - 5} more)"
+
+        win.addstr(2, 2, "The top swap consumer is NOT a monitored service:", warn_attr)
+        win.addstr(4, 2, "Process: ", label_attr)
+        win.addstr(4, 11, culprit['name'][:dialog_w - 13], ok_attr)
+        win.addstr(5, 2, "Swap:    ", label_attr)
+        win.addstr(5, 11, f"{culprit['swap_percent']:.1f}% ({swap_mb:.1f} MB)", warn_attr)
+        win.addstr(6, 2, "PIDs:    ", label_attr)
+        win.addstr(6, 11, pid_str[:dialog_w - 13], text_attr)
+
+        win.addstr(8, 2, "[r] Restart    [k] Kill (SIGKILL)    [s] Skip", label_attr)
+        win.addstr(9, 2, "Choose an action for this process:", text_attr)
+    except curses.error:
+        pass
+
+    win.refresh()
+
+    # Block until user picks an action
+    stdscr.nodelay(False)
+    while True:
+        ch = stdscr.getch()
+        if ch == ord('r'):
+            stdscr.nodelay(True)
+            return 'restart'
+        elif ch == ord('k'):
+            stdscr.nodelay(True)
+            return 'kill'
+        elif ch in (ord('s'), 27):
+            stdscr.nodelay(True)
+            return 'skip'
+        time.sleep(0.05)
 
 
 # Update dynamic data on the screen (colorized)
@@ -1941,7 +2148,7 @@ def main() -> None:
         update_status_bar(status_win, in_menu, in_theme, _in_search)
         curses.doupdate()
         log_scroll_pos = monitor_swap_usage(log_lines, bottom_win, swap_high_threshold, swap_low_threshold,
-                                            log_scroll_pos, alert_manager, metrics_db)
+                                            log_scroll_pos, alert_manager, metrics_db, stdscr)
         update_log_window(log_lines, bottom_win, log_scroll_pos)
 
         last_check_time = time.time()
@@ -1965,7 +2172,7 @@ def main() -> None:
             # Check swap usage every CHECK_INTERVAL seconds
             if current_time - last_check_time >= CHECK_INTERVAL:
                 log_scroll_pos = monitor_swap_usage(log_lines, bottom_win, swap_high_threshold, swap_low_threshold,
-                                                    log_scroll_pos, alert_manager, metrics_db)
+                                                    log_scroll_pos, alert_manager, metrics_db, stdscr)
                 last_check_time = current_time
 
             # Handle user input (single read per loop)
