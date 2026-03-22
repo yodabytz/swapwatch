@@ -1539,10 +1539,12 @@ def get_monitored_pids_cached(force_refresh: bool = False) -> Dict[str, dict]:
 
             for mon_name in monitored_process_names:
                 mon_l = mon_name.lower()
+                svc_l = monitored_apps[mon_name][0].lower()
                 if (
-                    mon_l in proc_name
-                    or (exe and mon_l in exe)
-                    or any(mon_l in arg for arg in cmdline_list)
+                    mon_l in proc_name or proc_name in mon_l
+                    or svc_l in proc_name or proc_name in svc_l
+                    or (exe and (mon_l in exe or svc_l in exe))
+                    or any(mon_l in arg or svc_l in arg for arg in cmdline_list)
                 ):
                     pid = proc.info['pid']
                     include_children = monitored_apps[mon_name][1]
@@ -1667,11 +1669,49 @@ def get_top_swap_apps(force_refresh: bool = False) -> List[dict]:
     return app_swap_usage
 
 
+def _match_monitored_app(proc_name: str, exe: str, cmdline_list: List[str]) -> Tuple[bool, Optional[str]]:
+    """Check if a process matches any monitored app by name, exe, cmdline, or service name.
+
+    Uses the same broad matching as get_monitored_pids_cached so that processes
+    like 'amavisd-new' correctly match the 'amavisd' monitored entry, and
+    processes named 'amavis' match via the service name.
+
+    Returns (is_monitored, monitored_key) where monitored_key is the key in
+    monitored_apps dict, or None if unmonitored.
+    """
+    proc_lower = proc_name.lower()
+    exe_lower = exe.lower() if exe else ''
+    cmd_lower = [x.lower() for x in cmdline_list] if cmdline_list else []
+
+    for mon_name, (service_name, _) in monitored_apps.items():
+        mon_lower = mon_name.lower()
+        svc_lower = service_name.lower()
+
+        # Check process name against monitored key (both directions for partial matches)
+        if mon_lower in proc_lower or proc_lower in mon_lower:
+            return True, mon_name
+
+        # Check process name against service name (e.g. process 'amavis' matches service 'amavis')
+        if svc_lower in proc_lower or proc_lower in svc_lower:
+            return True, mon_name
+
+        # Check exe path
+        if exe_lower and (mon_lower in exe_lower or svc_lower in exe_lower):
+            return True, mon_name
+
+        # Check cmdline args
+        if cmd_lower and any(mon_lower in arg or svc_lower in arg for arg in cmd_lower):
+            return True, mon_name
+
+    return False, None
+
+
 def get_all_swap_users(top_n: int = 20) -> List[dict]:
     """Scan ALL processes on the system for swap usage, not just monitored ones.
 
     Returns a sorted list of the top swap-consuming processes with a flag
-    indicating whether each is a monitored app or not.
+    indicating whether each is a monitored app or not. Processes that belong
+    to the same monitored app are consolidated under one entry.
     """
     global _performance_stats
 
@@ -1679,13 +1719,11 @@ def get_all_swap_users(top_n: int = 20) -> List[dict]:
     if total_swap == 0:
         return []
 
-    # Build a set of monitored process names for quick lookup
-    monitored_lower = {name.lower(): name for name in monitored_apps}
+    # Two dicts: one for monitored (grouped by monitored_key), one for unmonitored (grouped by proc name)
+    monitored_swap: Dict[str, dict] = {}
+    unmonitored_swap: Dict[str, dict] = {}
 
-    # Group processes by name, summing swap across PIDs
-    proc_swap: Dict[str, dict] = {}
-
-    for proc in psutil.process_iter(['pid', 'name']):
+    for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline']):
         try:
             pid = proc.info['pid']
             proc_name = proc.info['name'] or ''
@@ -1709,35 +1747,41 @@ def get_all_swap_users(top_n: int = 20) -> List[dict]:
             if swap_bytes == 0:
                 continue
 
-            # Group by process name
-            if proc_name not in proc_swap:
-                # Check if this process matches any monitored app
-                is_monitored = False
-                monitored_key = None
-                proc_name_lower = proc_name.lower()
-                for mon_lower, mon_orig in monitored_lower.items():
-                    if mon_lower in proc_name_lower or proc_name_lower in mon_lower:
-                        is_monitored = True
-                        monitored_key = mon_orig
-                        break
+            exe = proc.info.get('exe') or ''
+            cmdline_list = proc.info.get('cmdline') or []
+            is_monitored, monitored_key = _match_monitored_app(proc_name, exe, cmdline_list)
 
-                proc_swap[proc_name] = {
-                    'name': proc_name,
-                    'swap_bytes': 0,
-                    'pids': [],
-                    'is_monitored': is_monitored,
-                    'monitored_key': monitored_key,
-                }
-
-            proc_swap[proc_name]['swap_bytes'] += swap_bytes
-            proc_swap[proc_name]['pids'].append(pid)
+            if is_monitored and monitored_key:
+                # Consolidate under the monitored app key
+                if monitored_key not in monitored_swap:
+                    monitored_swap[monitored_key] = {
+                        'name': monitored_key,
+                        'swap_bytes': 0,
+                        'pids': [],
+                        'is_monitored': True,
+                        'monitored_key': monitored_key,
+                    }
+                monitored_swap[monitored_key]['swap_bytes'] += swap_bytes
+                monitored_swap[monitored_key]['pids'].append(pid)
+            else:
+                # Group unmonitored by process name
+                if proc_name not in unmonitored_swap:
+                    unmonitored_swap[proc_name] = {
+                        'name': proc_name,
+                        'swap_bytes': 0,
+                        'pids': [],
+                        'is_monitored': False,
+                        'monitored_key': None,
+                    }
+                unmonitored_swap[proc_name]['swap_bytes'] += swap_bytes
+                unmonitored_swap[proc_name]['pids'].append(pid)
 
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
 
-    # Calculate percentages and sort
+    # Combine and calculate percentages
     result = []
-    for info in proc_swap.values():
+    for info in list(monitored_swap.values()) + list(unmonitored_swap.values()):
         info['swap_percent'] = (info['swap_bytes'] / total_swap) * 100 if total_swap else 0.0
         result.append(info)
 
