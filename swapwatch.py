@@ -183,6 +183,7 @@ monitored_apps = {
     "monitorix": ("monitorix", False),
     "php-fpm8.2": ("php8.2-fpm", False),
     "php-fpm8.3": ("php8.3-fpm", False),
+    "php-fpm8.4": ("php8.4-fpm", False),
     "mariadbd": ("mariadb", False),
     "vnstat": ("vnstat", False),
     "nginx": ("nginx", True)  # Include nginx and combine child processes
