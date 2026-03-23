@@ -785,10 +785,22 @@ def restart_app(service_name: str, log_lines: List[str], log_scroll_pos: int,
                  metrics_db: Optional['MetricsDB'] = None) -> int:
     """Restart a systemd service and log the result.
 
+    Skips services that aren't installed to avoid wasting time during
+    a swap crisis.
+
     Returns:
         Updated log scroll position.
     """
     try:
+        # Quick check if the service unit exists before attempting restart
+        check = subprocess.run(
+            ['systemctl', 'cat', service_name],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5
+        )
+        if check.returncode != 0:
+            log_scroll_pos = log_action(f"Service {service_name} not found on this system - skipping", log_lines, log_scroll_pos)
+            return log_scroll_pos
+
         log_scroll_pos = log_action(f"Restarting service {service_name}", log_lines, log_scroll_pos)
         subprocess.run(
             ['systemctl', 'restart', service_name],
