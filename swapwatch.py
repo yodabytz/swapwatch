@@ -1541,9 +1541,13 @@ def get_monitored_pids_cached(force_refresh: bool = False) -> Dict[str, dict]:
             for mon_name in monitored_process_names:
                 mon_l = mon_name.lower()
                 svc_l = monitored_apps[mon_name][0].lower()
+                # Reverse substring matches (proc_name in mon/svc) require
+                # proc_name >= 4 chars to avoid false positives like 'ft' matching 'vsftpd'
+                proc_in_mon = proc_name in mon_l and len(proc_name) >= 4
+                proc_in_svc = proc_name in svc_l and len(proc_name) >= 4
                 if (
-                    mon_l in proc_name or proc_name in mon_l
-                    or svc_l in proc_name or proc_name in svc_l
+                    mon_l in proc_name or proc_in_mon
+                    or svc_l in proc_name or proc_in_svc
                     or (exe and (mon_l in exe or svc_l in exe))
                     or any(mon_l in arg or svc_l in arg for arg in cmdline_list)
                 ):
@@ -1677,6 +1681,10 @@ def _match_monitored_app(proc_name: str, exe: str, cmdline_list: List[str]) -> T
     like 'amavisd-new' correctly match the 'amavisd' monitored entry, and
     processes named 'amavis' match via the service name.
 
+    To prevent false positives from short process names (e.g. 'ft' matching
+    'vsftpd'), reverse substring matches require the shorter string to be at
+    least 4 characters long.
+
     Returns (is_monitored, monitored_key) where monitored_key is the key in
     monitored_apps dict, or None if unmonitored.
     """
@@ -1684,23 +1692,31 @@ def _match_monitored_app(proc_name: str, exe: str, cmdline_list: List[str]) -> T
     exe_lower = exe.lower() if exe else ''
     cmd_lower = [x.lower() for x in cmdline_list] if cmdline_list else []
 
+    # Minimum length for the shorter string in reverse substring checks
+    # prevents 'ft' matching 'vsftpd', 'sh' matching 'bash', etc.
+    MIN_SUBSTR_LEN = 4
+
     for mon_name, (service_name, _) in monitored_apps.items():
         mon_lower = mon_name.lower()
         svc_lower = service_name.lower()
 
-        # Check process name against monitored key (both directions for partial matches)
-        if mon_lower in proc_lower or proc_lower in mon_lower:
+        # Check process name against monitored key
+        if mon_lower in proc_lower:
+            return True, mon_name
+        if proc_lower in mon_lower and len(proc_lower) >= MIN_SUBSTR_LEN:
             return True, mon_name
 
-        # Check process name against service name (e.g. process 'amavis' matches service 'amavis')
-        if svc_lower in proc_lower or proc_lower in svc_lower:
+        # Check process name against service name
+        if svc_lower in proc_lower:
+            return True, mon_name
+        if proc_lower in svc_lower and len(proc_lower) >= MIN_SUBSTR_LEN:
             return True, mon_name
 
-        # Check exe path
+        # Check exe path (only forward match — monitored name in exe path)
         if exe_lower and (mon_lower in exe_lower or svc_lower in exe_lower):
             return True, mon_name
 
-        # Check cmdline args
+        # Check cmdline args (only forward match — monitored name in arg)
         if cmd_lower and any(mon_lower in arg or svc_lower in arg for arg in cmd_lower):
             return True, mon_name
 
