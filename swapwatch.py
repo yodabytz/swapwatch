@@ -4,6 +4,7 @@ import psutil
 import time
 import os
 import logging
+import logging.handlers
 from datetime import datetime
 import subprocess
 import sys
@@ -81,14 +82,21 @@ COLOR_PAIRS = {}
 COLORS_ENABLED = False
 COLORS_256 = False
 
-# Logging setup
+# Logging setup (with rotation to prevent unbounded log growth)
 LOG_FILE = "/var/log/swapwatch.log"
-logging.basicConfig(
-    filename=LOG_FILE,
-    level=logging.INFO,
-    format='%(asctime)s - %(message)s',  # Logging module adds timestamp
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MB max per log file
+LOG_BACKUP_COUNT = 3  # Keep 3 rotated backups
+
+def _setup_logging() -> None:
+    """Configure logging with rotation to prevent log files from growing unbounded."""
+    handler = logging.handlers.RotatingFileHandler(
+        LOG_FILE, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT
+    )
+    handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+    logging.root.addHandler(handler)
+    logging.root.setLevel(logging.INFO)
+
+_setup_logging()
 
 # ============== OSC 11 TRUECOLOR BACKGROUND SUPPORT ==============
 CSI = "\x1b["
@@ -218,6 +226,13 @@ MAX_LOG_LINES = 1000
 
 # Signal handling
 _shutdown_requested = False
+
+# Restart cooldown: prevent restart storms when restarts don't help
+_last_restart_cycle_time: float = 0
+RESTART_COOLDOWN = 900  # 15 minutes between restart cycles
+
+# Suppress repeated drop_caches failures (VPS read-only /proc)
+_drop_caches_failed = False
 
 # Swap history for sparkline
 _swap_history: deque = deque(maxlen=60)
@@ -805,9 +820,18 @@ def restart_app(service_name: str, log_lines: List[str], log_scroll_pos: int,
 def drop_caches(log_lines: List[str], log_scroll_pos: int) -> int:
     """Sync and drop kernel caches, logging any freed memory.
 
+    Remembers if drop_caches is unavailable (VPS read-only /proc) and
+    silently skips on subsequent calls to avoid log spam.
+
     Returns:
         Updated log scroll position.
     """
+    global _drop_caches_failed
+
+    # If we already know this doesn't work on this system, skip silently
+    if _drop_caches_failed:
+        return log_scroll_pos
+
     try:
         # Get memory stats before clearing
         mem_before = psutil.virtual_memory()
@@ -837,13 +861,14 @@ def drop_caches(log_lines: List[str], log_scroll_pos: int) -> int:
                     log_scroll_pos = log_action(f"Cleared caches: freed {freed_mb:.1f}MB memory, {swap_freed_mb:.1f}MB swap", log_lines, log_scroll_pos)
                 else:
                     log_scroll_pos = log_action(f"Cleared caches: freed {freed_mb:.1f}MB memory", log_lines, log_scroll_pos)
-            # If minimal effect, don't log anything (cache clearing didn't help much)
-        # If no effect, don't log success (as requested - only show if it actually worked)
 
-    except PermissionError:
-        log_scroll_pos = log_action("Cannot drop caches: insufficient permissions (VPS restriction)", log_lines, log_scroll_pos)
+    except (PermissionError, OSError):
+        # VPS or read-only /proc — remember this and don't retry
+        _drop_caches_failed = True
+        log_scroll_pos = log_action("Drop caches unavailable on this system (VPS restriction) - will not retry", log_lines, log_scroll_pos)
     except Exception as e:
-        log_scroll_pos = log_action(f"Failed to drop caches: {e}", log_lines, log_scroll_pos)
+        _drop_caches_failed = True
+        log_scroll_pos = log_action(f"Drop caches failed: {e} - will not retry", log_lines, log_scroll_pos)
     return log_scroll_pos
 
 
@@ -1376,6 +1401,21 @@ def monitor_swap_usage(log_lines: List[str], bottom_win: 'curses.window',
                     return log_scroll_pos
 
             # The top culprit IS a monitored service (or all top users are monitored)
+            # Check restart cooldown to prevent restart storms
+            global _last_restart_cycle_time
+            time_since_last = time.time() - _last_restart_cycle_time
+            if _last_restart_cycle_time > 0 and time_since_last < RESTART_COOLDOWN:
+                remaining = int(RESTART_COOLDOWN - time_since_last)
+                log_scroll_pos = log_action(
+                    f"[YELLOW]Restart cooldown active[/YELLOW] - last restart cycle was {int(time_since_last)}s ago. "
+                    f"Next restart allowed in {remaining}s. Skipping to prevent restart storm.",
+                    log_lines, log_scroll_pos
+                )
+                log_scroll_pos = log_action("Resuming normal operations", log_lines, log_scroll_pos)
+                return log_scroll_pos
+
+            _last_restart_cycle_time = time.time()
+
             # Proceed with normal monitored-app restarts
             log_scroll_pos = log_action(
                 f"Swap usage still too high at {swap_percent}%, restarting monitored services based on swap usage.",
@@ -1853,22 +1893,26 @@ def prompt_culprit_action(stdscr: 'curses.window', culprit: dict) -> str:
     except curses.error:
         pass
 
+        win.addstr(10, 2, "(Auto-skip in 60s if no response)", text_attr)
+    except curses.error:
+        pass
+
     win.refresh()
 
-    # Block until user picks an action
-    stdscr.nodelay(False)
-    while True:
+    # Wait for user input with a 60-second timeout so monitoring doesn't stall
+    stdscr.nodelay(True)
+    deadline = time.time() + 60
+    while time.time() < deadline:
         ch = stdscr.getch()
         if ch == ord('r'):
-            stdscr.nodelay(True)
             return 'restart'
         elif ch == ord('k'):
-            stdscr.nodelay(True)
             return 'kill'
         elif ch in (ord('s'), 27):
-            stdscr.nodelay(True)
             return 'skip'
-        time.sleep(0.05)
+        time.sleep(0.1)
+    # Timed out — auto-skip so monitoring resumes
+    return 'skip'
 
 
 # Update dynamic data on the screen (colorized)
@@ -2137,10 +2181,7 @@ def main() -> None:
     if config.get("general", {}).get("log_file"):
         for handler in logging.root.handlers[:]:
             logging.root.removeHandler(handler)
-        logging.basicConfig(
-            filename=LOG_FILE, level=logging.INFO,
-            format='%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'
-        )
+        _setup_logging()
 
     # CLI args override config (which overrides hardcoded defaults)
     swap_high_threshold = args.swap_high if args.swap_high is not None else SWAP_HIGH_THRESHOLD
