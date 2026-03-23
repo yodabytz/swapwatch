@@ -1353,20 +1353,52 @@ def monitor_swap_usage(log_lines: List[str], bottom_win: 'curses.window',
         time.sleep(2)
         swap_percent = psutil.swap_memory().percent
         if swap_percent >= swap_low_threshold:
+            # Check restart cooldown FIRST to prevent restart storms
+            global _last_restart_cycle_time
+            time_since_last = time.time() - _last_restart_cycle_time
+            if _last_restart_cycle_time > 0 and time_since_last < RESTART_COOLDOWN:
+                remaining = int(RESTART_COOLDOWN - time_since_last)
+                log_scroll_pos = log_action(
+                    f"[YELLOW]Restart cooldown active[/YELLOW] ({remaining}s remaining) - skipping to prevent restart storm.",
+                    log_lines, log_scroll_pos
+                )
+                log_scroll_pos = log_action("Resuming normal operations", log_lines, log_scroll_pos)
+                return log_scroll_pos
+
             # Scan ALL processes to find the real culprit
             all_users = get_all_swap_users()
 
             if all_users:
-                top_culprit = all_users[0]
+                # Calculate total monitored vs unmonitored swap usage
+                total_monitored_swap = sum(u['swap_bytes'] for u in all_users if u['is_monitored'])
+                total_unmonitored_swap = sum(u['swap_bytes'] for u in all_users if not u['is_monitored'])
+                top_unmonitored = [u for u in all_users if not u['is_monitored']]
 
-                if not top_culprit['is_monitored']:
-                    # The biggest swap consumer is NOT a monitored service
+                if total_unmonitored_swap > total_monitored_swap and top_unmonitored:
+                    # Unmonitored processes are using more swap than monitored ones
+                    top_culprit = top_unmonitored[0]
+                    unmon_mb = total_unmonitored_swap / (1024 * 1024)
+                    mon_mb = total_monitored_swap / (1024 * 1024)
                     swap_mb = top_culprit['swap_bytes'] / (1024 * 1024)
+
                     log_scroll_pos = log_action(
-                        f"[RED]Top swap culprit is unmonitored:[/RED] [YELLOW]{top_culprit['name']}[/YELLOW] "
-                        f"using [RED]{top_culprit['swap_percent']:.1f}%[/RED] ({swap_mb:.1f} MB) of swap",
+                        f"[RED]Unmonitored processes using more swap[/RED] ({unmon_mb:.0f}MB) "
+                        f"than monitored ({mon_mb:.0f}MB)",
                         log_lines, log_scroll_pos
                     )
+                    log_scroll_pos = log_action(
+                        f"[RED]Top unmonitored culprit:[/RED] [YELLOW]{top_culprit['name']}[/YELLOW] "
+                        f"using [RED]{top_culprit['swap_percent']:.1f}%[/RED] ({swap_mb:.1f} MB)",
+                        log_lines, log_scroll_pos
+                    )
+                    # Log other significant unmonitored consumers
+                    for u in top_unmonitored[1:5]:
+                        if u['swap_bytes'] > 10 * 1024 * 1024:  # > 10MB
+                            u_mb = u['swap_bytes'] / (1024 * 1024)
+                            log_scroll_pos = log_action(
+                                f"  Also unmonitored: [YELLOW]{u['name']}[/YELLOW] using {u_mb:.0f}MB",
+                                log_lines, log_scroll_pos
+                            )
                     log_scroll_pos = log_action(
                         f"Monitored services are [GREEN]not the primary cause[/GREEN] - skipping automatic restarts",
                         log_lines, log_scroll_pos
@@ -1394,7 +1426,6 @@ def monitor_swap_usage(log_lines: List[str], bottom_win: 'curses.window',
                                 metrics_db.record_action("kill", top_culprit['name'], "user_requested")
 
                         elif action == 'restart':
-                            # Try systemctl restart with the process name
                             service_guess = top_culprit['name']
                             log_scroll_pos = restart_app(service_guess, log_lines, log_scroll_pos, metrics_db)
 
@@ -1412,20 +1443,7 @@ def monitor_swap_usage(log_lines: List[str], bottom_win: 'curses.window',
                     log_scroll_pos = log_action("Resuming normal operations", log_lines, log_scroll_pos)
                     return log_scroll_pos
 
-            # The top culprit IS a monitored service (or all top users are monitored)
-            # Check restart cooldown to prevent restart storms
-            global _last_restart_cycle_time
-            time_since_last = time.time() - _last_restart_cycle_time
-            if _last_restart_cycle_time > 0 and time_since_last < RESTART_COOLDOWN:
-                remaining = int(RESTART_COOLDOWN - time_since_last)
-                log_scroll_pos = log_action(
-                    f"[YELLOW]Restart cooldown active[/YELLOW] - last restart cycle was {int(time_since_last)}s ago. "
-                    f"Next restart allowed in {remaining}s. Skipping to prevent restart storm.",
-                    log_lines, log_scroll_pos
-                )
-                log_scroll_pos = log_action("Resuming normal operations", log_lines, log_scroll_pos)
-                return log_scroll_pos
-
+            # Monitored services are the primary cause — proceed with restarts
             _last_restart_cycle_time = time.time()
 
             # Proceed with normal monitored-app restarts
