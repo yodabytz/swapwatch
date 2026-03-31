@@ -382,6 +382,10 @@ class AlertManager:
     def _send_webhook(self, severity: str, message: str, swap_percent: float,
                       hostname: str, timestamp: str) -> None:
         try:
+            # Restrict to http/https to prevent file:// SSRF
+            if not self.webhook_url.startswith(("https://", "http://")):
+                logging.warning(f"Webhook URL rejected: only http/https allowed")
+                return
             payload = json.dumps({
                 "severity": severity,
                 "message": message,
@@ -723,7 +727,12 @@ def apply_theme(theme_values: Dict[str, str]) -> None:
 
 def load_theme_by_name(theme_name: str) -> Dict[str, str]:
     """Load and apply a theme from THEME_DIR by name."""
-    path = os.path.join(THEME_DIR, theme_name)
+    # Sanitize: strip path separators to prevent directory traversal
+    safe_name = os.path.basename(theme_name)
+    path = os.path.realpath(os.path.join(THEME_DIR, safe_name))
+    if not path.startswith(os.path.realpath(THEME_DIR)):
+        logging.warning(f"Theme path traversal blocked: {theme_name}")
+        return DEFAULT_THEME_VALUES.copy()
     theme = parse_theme_file(path)
     apply_theme(theme)
     return theme
@@ -1313,9 +1322,10 @@ def show_process_detail(stdscr: 'curses.window', app_name: str) -> None:
     _wait_for_dismiss(stdscr)
 
 
-def _wait_for_dismiss(stdscr: 'curses.window') -> None:
-    """Block until user presses q or Esc."""
-    while True:
+def _wait_for_dismiss(stdscr: 'curses.window', timeout: int = 300) -> None:
+    """Block until user presses q or Esc, or timeout/shutdown."""
+    deadline = time.time() + timeout
+    while not _shutdown_requested and time.time() < deadline:
         key = stdscr.getch()
         if key in (ord('q'), 27):
             break
@@ -1410,10 +1420,22 @@ def monitor_swap_usage(log_lines: List[str], bottom_win: 'curses.window',
                         action = prompt_culprit_action(stdscr, top_culprit)
 
                         if action == 'kill':
+                            killed_count = 0
                             for pid in top_culprit['pids']:
                                 try:
+                                    # Verify PID still belongs to the same process before killing
+                                    proc = psutil.Process(pid)
+                                    if top_culprit['name'].lower() not in (proc.name() or '').lower():
+                                        log_scroll_pos = log_action(
+                                            f"PID {pid} is now a different process ({proc.name()}) - skipping",
+                                            log_lines, log_scroll_pos
+                                        )
+                                        continue
                                     os.kill(pid, signal.SIGKILL)
-                                except (ProcessLookupError, PermissionError) as e:
+                                    killed_count += 1
+                                except (psutil.NoSuchProcess, ProcessLookupError):
+                                    continue
+                                except PermissionError as e:
                                     log_scroll_pos = log_action(
                                         f"Failed to kill PID {pid}: {e}", log_lines, log_scroll_pos
                                     )
@@ -1920,9 +1942,6 @@ def prompt_culprit_action(stdscr: 'curses.window', culprit: dict) -> str:
 
         win.addstr(8, 2, "[r] Restart    [k] Kill (SIGKILL)    [s] Skip", label_attr)
         win.addstr(9, 2, "Choose an action for this process:", text_attr)
-    except curses.error:
-        pass
-
         win.addstr(10, 2, "(Auto-skip in 60s if no response)", text_attr)
     except curses.error:
         pass
@@ -1949,6 +1968,10 @@ def prompt_culprit_action(stdscr: 'curses.window', culprit: dict) -> str:
 def update_ui(top_left_win: 'curses.window', top_right_win: 'curses.window') -> None:
     """Refresh the stats and top-apps panels with current data."""
     mem_usage, swap_usage = get_memory_and_swap_usage()
+
+    # Erase stale content before redrawing to prevent rendering drift
+    top_left_win.erase()
+    top_left_win.bkgd(' ', color_attr_for("background"))
 
     # Border & title
     if COLORS_ENABLED:
@@ -2005,6 +2028,10 @@ def update_ui(top_left_win: 'curses.window', top_right_win: 'curses.window') -> 
     # Top apps by swap usage
     top_apps = get_top_swap_apps()[:10]  # Get top 10 swap-using apps
 
+    # Erase stale content before redrawing
+    top_right_win.erase()
+    top_right_win.bkgd(' ', color_attr_for("background"))
+
     if COLORS_ENABLED:
         top_right_win.attron(color_attr_for("border"))
     top_right_win.box()
@@ -2012,13 +2039,7 @@ def update_ui(top_left_win: 'curses.window', top_right_win: 'curses.window') -> 
         top_right_win.attroff(color_attr_for("border"))
     top_right_win.addstr(0, 2, "Top Swap Using Apps", color_attr_for("title") | curses.A_BOLD)
 
-    # Clear only the area where app data is displayed
-    max_display_lines = top_right_win.getmaxyx()[0] - 3  # Account for border and title
-    for idx in range(max_display_lines):
-        try:
-            top_right_win.addstr(2 + idx, 2, " " * (top_right_win.getmaxyx()[1] - 4))
-        except curses.error:
-            pass
+    max_display_lines = top_right_win.getmaxyx()[0] - 3
 
     # Display apps (up to what fits in the window)
     display_count = min(len(top_apps), max_display_lines)
@@ -2178,11 +2199,7 @@ def show_help(stdscr: 'curses.window') -> None:
         except curses.error:
             pass
     help_win.refresh()
-    while True:
-        key = stdscr.getch()
-        if key == ord('q') or key == 27:
-            break
-        time.sleep(0.1)
+    _wait_for_dismiss(stdscr)
 
 
 # Run the curses app
@@ -2287,8 +2304,19 @@ def main() -> None:
 
         last_check_time = time.time()
         last_ui_update_time = time.time()
+        last_full_redraw_time = time.time()
+        FULL_REDRAW_INTERVAL = 300  # Full screen redraw every 5 min to prevent rendering drift
         while not _shutdown_requested:
             current_time = time.time()
+
+            # Periodic full screen redraw to fix any curses rendering corruption
+            if current_time - last_full_redraw_time >= FULL_REDRAW_INTERVAL:
+                if not in_menu and not in_theme:
+                    stdscr.clear()
+                    stdscr.refresh()
+                    top_left_win, top_right_win, bottom_win, status_win = setup_ui(stdscr)
+                    log_lines_visible = bottom_win.getmaxyx()[0] - 2
+                last_full_redraw_time = current_time
 
             # Update UI at specified interval
             if current_time - last_ui_update_time >= UI_UPDATE_INTERVAL:
@@ -2305,8 +2333,12 @@ def main() -> None:
 
             # Check swap usage every CHECK_INTERVAL seconds
             if current_time - last_check_time >= CHECK_INTERVAL:
-                log_scroll_pos = monitor_swap_usage(log_lines, bottom_win, swap_high_threshold, swap_low_threshold,
-                                                    log_scroll_pos, alert_manager, metrics_db, stdscr)
+                try:
+                    log_scroll_pos = monitor_swap_usage(log_lines, bottom_win, swap_high_threshold, swap_low_threshold,
+                                                        log_scroll_pos, alert_manager, metrics_db, stdscr)
+                except Exception as e:
+                    log_scroll_pos = log_action(f"[RED]Monitor error:[/RED] {e} - will retry next cycle", log_lines, log_scroll_pos)
+                    logging.exception("monitor_swap_usage crashed")
                 last_check_time = current_time
 
             # Handle user input (single read per loop)
